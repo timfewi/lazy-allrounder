@@ -1,0 +1,14 @@
+[package]
+name = "lazy-allrounder-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+directories.workspace = true
+lazy-allrounder-core = { path = "../core" }
+lazy-allrounder-integrations = { path = "../integrations" }
+serde.workspace = true
+thiserror.workspace = true
+toml.workspace = true

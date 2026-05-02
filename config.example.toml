@@ -1,0 +1,14 @@
+[text]
+provider = "openrouter"
+model = "qwen/qwen3.6-flash"
+
+[stt]
+provider = "openrouter"
+model = "openai/whisper-large-v3-turbo"
+
+[tts]
+provider = "openrouter"
+model = "google/gemini-3.1-flash-tts-preview"
+
+# Secrets belong in environment variables, for example:
+# OPENROUTER_API_KEY=...
