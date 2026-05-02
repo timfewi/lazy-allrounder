@@ -1,0 +1,61 @@
+repository:
+  name: lazy-allrounder
+  description: "Cross-platform voice workflows in Rust: dictate, read, explain, summarize, and ask."
+  private: false
+  has_issues: true
+  has_projects: true
+  has_wiki: false
+  default_branch: main
+
+labels:
+  - name: "kind/bug"
+    color: "d73a4a"
+    description: "A confirmed defect or broken behavior."
+  - name: "kind/feature"
+    color: "0e8a16"
+    description: "A new capability or user-facing enhancement."
+  - name: "kind/docs"
+    color: "0075ca"
+    description: "Documentation improvements."
+  - name: "kind/refactor"
+    color: "5319e7"
+    description: "Internal cleanup without intended behavior change."
+  - name: "area/core"
+    color: "fbca04"
+    description: "Workflow rules, domain types, and ports."
+  - name: "area/platform"
+    color: "f9d0c4"
+    description: "OS-specific capture, insertion, playback, or hotkeys."
+  - name: "area/integrations"
+    color: "bfd4f2"
+    description: "Hosted provider clients and request handling."
+  - name: "area/app"
+    color: "c2e0c6"
+    description: "Config loading, wiring, and orchestration."
+  - name: "area/cli"
+    color: "c5def5"
+    description: "CLI parsing and terminal UX."
+  - name: "status/blocked"
+    color: "b60205"
+    description: "Cannot proceed until an external dependency or decision changes."
+  - name: "status/needs-design"
+    color: "d4c5f9"
+    description: "Needs architecture or product design before implementation."
+  - name: "priority/high"
+    color: "e11d21"
+    description: "High-priority work."
+  - name: "priority/normal"
+    color: "fbca04"
+    description: "Default priority."
+  - name: "priority/low"
+    color: "0e8a16"
+    description: "Nice-to-have or deferrable work."
+
+topics:
+  - rust
+  - cli
+  - cross-platform
+  - accessibility
+  - speech-to-text
+  - text-to-speech
+  - openrouter
