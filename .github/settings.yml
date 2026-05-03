@@ -1,6 +1,6 @@
 repository:
   name: lazy-allrounder
-  description: "Cross-platform voice workflows in Rust: dictate, read, explain, summarize, and ask."
+  description: "Cross-platform voice AI in Rust for dictation, speech-to-text, text-to-speech, and reading workflows."
   private: false
   has_issues: true
   has_projects: true
@@ -55,7 +55,14 @@ topics:
   - rust
   - cli
   - cross-platform
+  - windows
+  - macos
+  - linux
   - accessibility
+  - productivity
+  - dictation
   - speech-to-text
   - text-to-speech
+  - voice-ai
+  - ai
   - openrouter

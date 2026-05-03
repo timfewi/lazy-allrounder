@@ -1,6 +1,6 @@
 # lazy-allrounder
 
-Cross-platform voice workflows in Rust: dictate, read, explain, summarize, and ask with hosted models.
+Cross-platform voice AI in Rust for dictation, speech-to-text, text-to-speech, and reading workflows on Windows, macOS, and Linux.
 
 ## Description
 
@@ -8,13 +8,39 @@ Cross-platform voice workflows in Rust: dictate, read, explain, summarize, and a
 
 The project currently supports hosted CLI workflows. Dictation is available as a real audio-file-or-stdin transcription flow. Hotkeys and native playback are intentionally not exposed until the platform adapters are real.
 
-## Current workflows
+## Project status
+
+`lazy-allrounder` is currently in an early CLI-first stage. The hosted model path is working, the repository is public, and the remaining work is mostly around turning the current command set into a true desktop-style cross-platform experience.
+
+## Supported today
 
 - `dictate`
 - `read`
 - `explain`
 - `summarize`
 - `ask`
+
+## Roadmap
+
+### Done
+
+- [x] Create the Rust workspace and crate boundaries
+- [x] Add hosted model configuration through TOML + environment variables
+- [x] Implement OpenRouter-backed text generation, speech-to-text, and text-to-speech flows
+- [x] Ship a real `dictate` path for audio file/stdin -> transcript
+- [x] Prepare the repository for public open source use
+
+### Current focus
+
+- [ ] Keep the CLI workflows stable and sharpen the project messaging/docs
+
+### Next
+
+- [ ] Add microphone capture for live dictation
+- [ ] Add focused-app text insertion
+- [ ] Add platform-native playback
+- [ ] Add hotkeys only after real platform adapters exist
+- [ ] Package and test releases for Windows, macOS, and Linux
 
 ## Configuration and opt-in
 
