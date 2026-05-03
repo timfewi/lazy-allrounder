@@ -9,6 +9,7 @@ rust-version.workspace = true
 directories.workspace = true
 lazy-allrounder-core = { path = "../core" }
 lazy-allrounder-integrations = { path = "../integrations" }
+lazy-allrounder-platform = { path = "../platform" }
 serde.workspace = true
 thiserror.workspace = true
 toml.workspace = true

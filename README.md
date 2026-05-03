@@ -6,7 +6,7 @@ Cross-platform voice AI in Rust for dictation, speech-to-text, text-to-speech, a
 
 `lazy-allrounder` combines the ideas behind `whisper-nix` and `lazy-reader-nix` into a single OS-agnostic CLI-first application for Windows, macOS, and Linux.
 
-The project currently supports hosted CLI workflows. Dictation is available as a real audio-file-or-stdin transcription flow. Hotkeys and native playback are intentionally not exposed until the platform adapters are real.
+The project currently supports hosted CLI workflows. Dictation is available as a real audio-file-or-stdin transcription flow, and Linux now has an early microphone capture path for direct dictation from the terminal. Hotkeys and native playback are intentionally not exposed until the platform adapters are real.
 
 ## Project status
 
@@ -36,7 +36,7 @@ The project currently supports hosted CLI workflows. Dictation is available as a
 
 ### Next
 
-- [ ] Add microphone capture for live dictation
+- [x] Add microphone capture for live dictation
 - [ ] Add focused-app text insertion
 - [ ] Add platform-native playback
 - [ ] Add hotkeys only after real platform adapters exist
@@ -82,19 +82,20 @@ nix flake check
 
 ## Usage
 
-All hosted commands require either `--stdin` or `--file`.
+All hosted commands require either `--stdin`, `--file`, or in the Linux dictate path `--microphone`.
 
 Examples:
 
 ```bash
 cat sample.wav | cargo run -p lazy-allrounder-cli -- dictate --stdin
 cargo run -p lazy-allrounder-cli -- dictate --file ./sample.wav --output transcript.txt
+cargo run -p lazy-allrounder-cli -- dictate --microphone
 printf 'Explain this paragraph' | cargo run -p lazy-allrounder-cli -- explain --stdin
 cargo run -p lazy-allrounder-cli -- summarize --file ./README.md
 cargo run -p lazy-allrounder-cli -- ask --file ./README.md --question "What does this project do?"
 ```
 
-`dictate` prints the transcript to stdout by default, or writes it to `--output`. The text-to-speech commands write audio to `lazy-allrounder-<command>.mp3` by default. Use `--output <path>` to choose another file.
+`dictate` prints the transcript to stdout by default, or writes it to `--output`. On Linux, `dictate --microphone` records from `pw-record` until you press Enter, then sends the captured WAV to OpenRouter STT. The text-to-speech commands write audio to `lazy-allrounder-<command>.mp3` by default. Use `--output <path>` to choose another file.
 
 ## Security and public repo hygiene
 

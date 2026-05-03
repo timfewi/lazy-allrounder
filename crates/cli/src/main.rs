@@ -25,7 +25,7 @@ enum Command {
     Dictate {
         #[command(flatten)]
         input: BinaryInput,
-        #[arg(long, value_enum)]
+        #[arg(long, value_enum, conflicts_with = "microphone")]
         format: Option<AudioFormat>,
         #[arg(long)]
         output: Option<PathBuf>,
@@ -64,6 +64,8 @@ struct TextInput {
 #[derive(Debug, clap::Args)]
 struct BinaryInput {
     #[arg(long, group = "input")]
+    microphone: bool,
+    #[arg(long, group = "input")]
     stdin: bool,
     #[arg(long, group = "input")]
     file: Option<PathBuf>,
@@ -96,10 +98,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             output,
         } => {
             let application = load_application(cli.config.as_deref())?;
-            let audio = read_binary_input(&input)?;
-            let transcript = application
-                .dictate(audio, audio_format(format, input.file.as_deref()))
-                .await?;
+            let transcript = if input.microphone {
+                eprintln!("Recording from the Linux microphone. Press Enter to stop.");
+                application.dictate_from_microphone().await?
+            } else {
+                let audio = read_binary_input(&input)?;
+                application
+                    .dictate(audio, audio_format(format, input.file.as_deref()))
+                    .await?
+            };
             if let Some(output) = output.as_deref() {
                 write_text_output(output, &transcript)?;
                 println!("{}", output.display());
@@ -165,7 +172,7 @@ fn read_binary_input(input: &BinaryInput) -> Result<Vec<u8>, io::Error> {
             None => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    "either --stdin or --file must be provided",
+                    "either --microphone, --stdin, or --file must be provided",
                 ));
             }
         }
@@ -179,6 +186,53 @@ fn read_binary_input(input: &BinaryInput) -> Result<Vec<u8>, io::Error> {
     }
 
     Ok(audio)
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::Cli;
+
+    #[test]
+    fn dictate_accepts_microphone_input() {
+        let cli = Cli::try_parse_from(["lazy-allrounder", "dictate", "--microphone"])
+            .expect("microphone input should parse");
+
+        assert!(matches!(cli.command, super::Command::Dictate { .. }));
+    }
+
+    #[test]
+    fn dictate_rejects_multiple_input_sources() {
+        let error = Cli::try_parse_from([
+            "lazy-allrounder",
+            "dictate",
+            "--microphone",
+            "--file",
+            "sample.wav",
+        ])
+        .expect_err("multiple input sources should fail");
+
+        let message = error.to_string();
+        assert!(message.contains("--microphone"));
+        assert!(message.contains("--file"));
+    }
+
+    #[test]
+    fn dictate_rejects_microphone_with_explicit_format() {
+        let error = Cli::try_parse_from([
+            "lazy-allrounder",
+            "dictate",
+            "--microphone",
+            "--format",
+            "wav",
+        ])
+        .expect_err("microphone capture should not accept a manual format override");
+
+        let message = error.to_string();
+        assert!(message.contains("--microphone"));
+        assert!(message.contains("--format"));
+    }
 }
 
 fn audio_format(format: Option<AudioFormat>, path: Option<&Path>) -> &'static str {

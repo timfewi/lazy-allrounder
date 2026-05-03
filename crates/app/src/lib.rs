@@ -13,6 +13,7 @@ use lazy_allrounder_integrations::{
     OpenRouterClient, OpenRouterSpeechToTextClient, OpenRouterTextClient,
     OpenRouterTextToSpeechClient,
 };
+use lazy_allrounder_platform::capture_microphone_until_enter;
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -92,6 +93,14 @@ impl Application {
             .await
             .map_err(CoreError::from)
             .map_err(AppError::from)
+    }
+
+    pub async fn dictate_from_microphone(&self) -> Result<String, AppError> {
+        let audio = capture_microphone_until_enter()
+            .map_err(CoreError::from)
+            .map_err(AppError::from)?;
+
+        self.dictate(audio, "wav").await
     }
 
     pub async fn read(&self, text: String) -> Result<Vec<u8>, AppError> {

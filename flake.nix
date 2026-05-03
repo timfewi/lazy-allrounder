@@ -15,6 +15,7 @@
             cargo
             clippy
             nixfmt-rfc-style
+            pipewire
             rust-analyzer
             rustc
             rustfmt
