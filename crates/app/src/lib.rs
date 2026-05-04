@@ -13,7 +13,11 @@ use lazy_allrounder_integrations::{
     OpenRouterClient, OpenRouterSpeechToTextClient, OpenRouterTextClient,
     OpenRouterTextToSpeechClient,
 };
-use lazy_allrounder_platform::capture_microphone_until_enter;
+pub use lazy_allrounder_platform::{DictateState, DictateStatus};
+use lazy_allrounder_platform::{
+    DictateToggleResult, PendingDictation, capture_microphone_until_enter, dictate_start,
+    dictate_status as platform_dictate_status, dictate_stop, dictate_toggle,
+};
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -61,6 +65,12 @@ pub struct Application {
     tts_client: OpenRouterTextToSpeechClient,
 }
 
+#[derive(Debug)]
+pub enum DictateCaptureOutcome {
+    Started,
+    Pending(PendingDictation),
+}
+
 impl Application {
     pub fn from_loaded_configuration(loaded: &LoadedConfiguration) -> Result<Self, AppError> {
         if !loaded.exists {
@@ -96,11 +106,11 @@ impl Application {
     }
 
     pub async fn dictate_from_microphone(&self) -> Result<String, AppError> {
-        let audio = capture_microphone_until_enter()
+        let pending = capture_microphone_until_enter()
             .map_err(CoreError::from)
             .map_err(AppError::from)?;
 
-        self.dictate(audio, "wav").await
+        self.transcribe_pending_dictation(pending).await
     }
 
     pub async fn read(&self, text: String) -> Result<Vec<u8>, AppError> {
@@ -142,6 +152,52 @@ impl Application {
             .await
             .map_err(AppError::from)
     }
+
+    pub async fn transcribe_pending_dictation(
+        &self,
+        pending: PendingDictation,
+    ) -> Result<String, AppError> {
+        let (audio, completion) = pending.into_parts();
+        let result = self.dictate(audio, "wav").await;
+        let finish_result = completion
+            .finish()
+            .map_err(CoreError::from)
+            .map_err(AppError::from);
+
+        match (result, finish_result) {
+            (Ok(transcript), Ok(())) => Ok(transcript),
+            (Err(error), _) => Err(error),
+            (Ok(_), Err(error)) => Err(error),
+        }
+    }
+}
+
+pub fn dictate_start_capture() -> Result<(), AppError> {
+    dictate_start()
+        .map_err(CoreError::from)
+        .map_err(AppError::from)
+}
+
+pub fn dictate_stop_capture() -> Result<PendingDictation, AppError> {
+    dictate_stop()
+        .map_err(CoreError::from)
+        .map_err(AppError::from)
+}
+
+pub fn dictate_toggle_capture() -> Result<DictateCaptureOutcome, AppError> {
+    match dictate_toggle()
+        .map_err(CoreError::from)
+        .map_err(AppError::from)?
+    {
+        DictateToggleResult::Started => Ok(DictateCaptureOutcome::Started),
+        DictateToggleResult::Pending(pending) => Ok(DictateCaptureOutcome::Pending(pending)),
+    }
+}
+
+pub fn dictate_runtime_status() -> Result<DictateStatus, AppError> {
+    platform_dictate_status()
+        .map_err(CoreError::from)
+        .map_err(AppError::from)
 }
 
 pub fn default_config_path() -> Result<PathBuf, AppError> {

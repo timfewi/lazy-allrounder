@@ -5,7 +5,10 @@ use std::{
 };
 
 use clap::{Parser, Subcommand};
-use lazy_allrounder_app::{Application, load_configuration};
+use lazy_allrounder_app::{
+    Application, DictateCaptureOutcome, DictateState, dictate_runtime_status,
+    dictate_start_capture, dictate_stop_capture, dictate_toggle_capture, load_configuration,
+};
 use tracing_subscriber::{EnvFilter, fmt};
 
 const MAX_AUDIO_BYTES: usize = 25 * 1024 * 1024;
@@ -22,14 +25,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    Dictate {
-        #[command(flatten)]
-        input: BinaryInput,
-        #[arg(long, value_enum, conflicts_with = "microphone")]
-        format: Option<AudioFormat>,
-        #[arg(long)]
-        output: Option<PathBuf>,
-    },
+    Dictate(DictateCommand),
     Read {
         #[command(flatten)]
         input: TextInput,
@@ -49,6 +45,59 @@ enum Command {
         question: String,
     },
     ConfigPath,
+}
+
+#[derive(Debug, clap::Args)]
+struct DictateCommand {
+    #[command(subcommand)]
+    action: Option<DictateAction>,
+    #[command(flatten)]
+    input: BinaryInput,
+    #[arg(long, value_enum, conflicts_with = "microphone")]
+    format: Option<AudioFormat>,
+    #[arg(long, short = 'o')]
+    output: Option<PathBuf>,
+}
+
+impl DictateCommand {
+    fn validate(&self) -> Result<(), io::Error> {
+        let has_input_flags =
+            self.input.microphone || self.input.stdin || self.input.file.is_some();
+
+        let Some(_) = &self.action else {
+            return Ok(());
+        };
+
+        if has_input_flags || self.format.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "dictate lifecycle commands cannot be combined with --microphone, --stdin, --file, or --format",
+            ));
+        }
+
+        if self.output.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "one-shot dictate output flags must be passed without a lifecycle subcommand",
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Subcommand)]
+enum DictateAction {
+    Start,
+    Stop {
+        #[arg(long, short = 'o')]
+        output: Option<PathBuf>,
+    },
+    Toggle {
+        #[arg(long, short = 'o')]
+        output: Option<PathBuf>,
+    },
+    Status,
 }
 
 #[derive(Debug, clap::Args)]
@@ -92,26 +141,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Dictate {
-            input,
-            format,
-            output,
-        } => {
-            let application = load_application(cli.config.as_deref())?;
-            let transcript = if input.microphone {
-                eprintln!("Recording from the Linux microphone. Press Enter to stop.");
-                application.dictate_from_microphone().await?
-            } else {
-                let audio = read_binary_input(&input)?;
-                application
-                    .dictate(audio, audio_format(format, input.file.as_deref()))
-                    .await?
-            };
-            if let Some(output) = output.as_deref() {
-                write_text_output(output, &transcript)?;
-                println!("{}", output.display());
-            } else {
-                println!("{transcript}");
+        Command::Dictate(dictate) => {
+            dictate.validate()?;
+
+            match dictate.action {
+                Some(DictateAction::Start) => {
+                    dictate_start_capture()?;
+                    println!("{}", DictateState::Recording.as_str());
+                }
+                Some(DictateAction::Status) => {
+                    let status = dictate_runtime_status()?;
+                    println!("{}", status.state.as_str());
+                }
+                Some(DictateAction::Stop { output }) => {
+                    let pending = dictate_stop_capture()?;
+                    let application = load_application(cli.config.as_deref())?;
+                    let transcript = application.transcribe_pending_dictation(pending).await?;
+                    write_dictate_output(output.as_deref(), &transcript)?;
+                }
+                Some(DictateAction::Toggle { output }) => match dictate_toggle_capture()? {
+                    DictateCaptureOutcome::Started => {
+                        println!("{}", DictateState::Recording.as_str());
+                    }
+                    DictateCaptureOutcome::Pending(pending) => {
+                        let application = load_application(cli.config.as_deref())?;
+                        let transcript = application.transcribe_pending_dictation(pending).await?;
+                        write_dictate_output(output.as_deref(), &transcript)?;
+                    }
+                },
+                None => {
+                    let application = load_application(cli.config.as_deref())?;
+                    let transcript = if dictate.input.microphone {
+                        eprintln!("Recording from the Linux microphone. Press Enter to stop.");
+                        application.dictate_from_microphone().await?
+                    } else {
+                        let audio = read_binary_input(&dictate.input)?;
+                        application
+                            .dictate(
+                                audio,
+                                audio_format(dictate.format, dictate.input.file.as_deref()),
+                            )
+                            .await?
+                    };
+                    write_dictate_output(dictate.output.as_deref(), &transcript)?;
+                }
             }
         }
         Command::Read { input } => {
@@ -188,11 +261,22 @@ fn read_binary_input(input: &BinaryInput) -> Result<Vec<u8>, io::Error> {
     Ok(audio)
 }
 
+fn write_dictate_output(output: Option<&Path>, transcript: &str) -> Result<(), io::Error> {
+    if let Some(output) = output {
+        write_text_output(output, transcript)?;
+        println!("{}", output.display());
+    } else {
+        println!("{transcript}");
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use clap::Parser;
 
-    use super::Cli;
+    use super::{Cli, Command, DictateAction};
 
     #[test]
     fn dictate_accepts_microphone_input() {
@@ -232,6 +316,55 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("--microphone"));
         assert!(message.contains("--format"));
+    }
+
+    #[test]
+    fn dictate_start_subcommand_parses() {
+        let cli = Cli::try_parse_from(["lazy-allrounder", "dictate", "start"])
+            .expect("start should parse");
+
+        assert!(matches!(
+            cli.command,
+            Command::Dictate(super::DictateCommand {
+                action: Some(DictateAction::Start),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn dictate_stop_accepts_output_after_subcommand() {
+        let cli = Cli::try_parse_from([
+            "lazy-allrounder",
+            "dictate",
+            "stop",
+            "--output",
+            "transcript.txt",
+        ])
+        .expect("stop output should parse after the lifecycle subcommand");
+
+        assert!(matches!(
+            cli.command,
+            Command::Dictate(super::DictateCommand {
+                action: Some(DictateAction::Stop { output: Some(_) }),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn dictate_stop_accepts_short_output_after_subcommand() {
+        let cli =
+            Cli::try_parse_from(["lazy-allrounder", "dictate", "stop", "-o", "transcript.txt"])
+                .expect("stop short output should parse after the lifecycle subcommand");
+
+        assert!(matches!(
+            cli.command,
+            Command::Dictate(super::DictateCommand {
+                action: Some(DictateAction::Stop { output: Some(_) }),
+                ..
+            })
+        ));
     }
 }
 

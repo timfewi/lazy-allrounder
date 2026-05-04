@@ -6,7 +6,7 @@ Cross-platform voice AI in Rust for dictation, speech-to-text, text-to-speech, a
 
 `lazy-allrounder` combines the ideas behind `whisper-nix` and `lazy-reader-nix` into a single OS-agnostic CLI-first application for Windows, macOS, and Linux.
 
-The project currently supports hosted CLI workflows. Dictation is available as a real audio-file-or-stdin transcription flow, and Linux now has an early microphone capture path for direct dictation from the terminal. Hotkeys and native playback are intentionally not exposed until the platform adapters are real.
+The project currently supports hosted CLI workflows. Dictation is available as a real audio-file-or-stdin transcription flow, and Linux now has an early real dictate runtime with microphone capture plus `start` / `stop` / `toggle` / `status` lifecycle commands. Hotkeys and native playback are intentionally not exposed until the platform adapters are real.
 
 ## Project status
 
@@ -28,6 +28,7 @@ The project currently supports hosted CLI workflows. Dictation is available as a
 - [x] Add hosted model configuration through TOML + environment variables
 - [x] Implement OpenRouter-backed text generation, speech-to-text, and text-to-speech flows
 - [x] Ship a real `dictate` path for audio file/stdin -> transcript
+- [x] Add real Linux dictate lifecycle/runtime commands
 - [x] Prepare the repository for public open source use
 
 ### Current focus
@@ -82,7 +83,7 @@ nix flake check
 
 ## Usage
 
-All hosted commands require either `--stdin`, `--file`, or in the Linux dictate path `--microphone`.
+Hosted transcription commands require either `--stdin`, `--file`, or in the Linux dictate path `--microphone`.
 
 Examples:
 
@@ -90,12 +91,17 @@ Examples:
 cat sample.wav | cargo run -p lazy-allrounder-cli -- dictate --stdin
 cargo run -p lazy-allrounder-cli -- dictate --file ./sample.wav --output transcript.txt
 cargo run -p lazy-allrounder-cli -- dictate --microphone
+cargo run -p lazy-allrounder-cli -- dictate start
+cargo run -p lazy-allrounder-cli -- dictate status
+cargo run -p lazy-allrounder-cli -- dictate stop --output transcript.txt
+cargo run -p lazy-allrounder-cli -- dictate stop -o transcript.txt
+cargo run -p lazy-allrounder-cli -- dictate toggle
 printf 'Explain this paragraph' | cargo run -p lazy-allrounder-cli -- explain --stdin
 cargo run -p lazy-allrounder-cli -- summarize --file ./README.md
 cargo run -p lazy-allrounder-cli -- ask --file ./README.md --question "What does this project do?"
 ```
 
-`dictate` prints the transcript to stdout by default, or writes it to `--output`. On Linux, `dictate --microphone` records from `pw-record` until you press Enter, then sends the captured WAV to OpenRouter STT. The text-to-speech commands write audio to `lazy-allrounder-<command>.mp3` by default. Use `--output <path>` to choose another file.
+`dictate` prints the transcript to stdout by default, or writes it to `--output`. On Linux, `dictate --microphone` records from `pw-record` until you press Enter, then sends the captured WAV to OpenRouter STT. The Linux runtime commands use a visible state file at `$XDG_RUNTIME_DIR/lazy-allrounder-dictate.state` and currently report `idle`, `recording`, or `transcribing`. `dictate start` and `dictate status` do not need model credentials, but `dictate stop`, `dictate toggle` (when stopping), and the one-shot transcription paths still need the normal STT config and API key. The text-to-speech commands write audio to `lazy-allrounder-<command>.mp3` by default. Use `--output <path>` to choose another file.
 
 ## Security and public repo hygiene
 
