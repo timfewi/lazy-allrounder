@@ -5,6 +5,14 @@ members = [
   "crates/core",
   "crates/integrations",
   "crates/platform",
+  "xtask",
+]
+default-members = [
+  "crates/app",
+  "crates/cli",
+  "crates/core",
+  "crates/integrations",
+  "crates/platform",
 ]
 resolver = "3"
 

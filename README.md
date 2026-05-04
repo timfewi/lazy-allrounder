@@ -70,9 +70,11 @@ export OPENROUTER_API_KEY="..."
 ### Rust
 
 ```bash
-cargo test
+cargo test-workspace
 cargo run -p lazy-allrounder-cli -- config-path
 ```
+
+`cargo test` still works, but `cargo test-workspace` prints a compact per-crate summary and only expands full output when a section fails.
 
 ### Nix
 

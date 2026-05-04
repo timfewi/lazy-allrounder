@@ -1,0 +1,2 @@
+[alias]
+test-workspace = "run --offline --quiet --package xtask -- test"

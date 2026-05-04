@@ -10,9 +10,11 @@ Thanks for contributing to `lazy-allrounder`.
 
 ```bash
 cargo fmt --all
-cargo test
+cargo test-workspace
 nix flake check
 ```
+
+Use `cargo test-workspace` for the structured workspace report. `cargo test` remains available when you need the raw harness output.
 
 ## Development guidelines
 
