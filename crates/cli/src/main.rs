@@ -141,52 +141,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Dictate(dictate) => {
-            dictate.validate()?;
-
-            match dictate.action {
-                Some(DictateAction::Start) => {
-                    dictate_start_capture()?;
-                    println!("{}", DictateState::Recording.as_str());
-                }
-                Some(DictateAction::Status) => {
-                    let status = dictate_runtime_status()?;
-                    println!("{}", status.state.as_str());
-                }
-                Some(DictateAction::Stop { output }) => {
-                    let pending = dictate_stop_capture()?;
-                    let application = load_application(cli.config.as_deref())?;
-                    let transcript = application.transcribe_pending_dictation(pending).await?;
-                    write_dictate_output(output.as_deref(), &transcript)?;
-                }
-                Some(DictateAction::Toggle { output }) => match dictate_toggle_capture()? {
-                    DictateCaptureOutcome::Started => {
-                        println!("{}", DictateState::Recording.as_str());
-                    }
-                    DictateCaptureOutcome::Pending(pending) => {
-                        let application = load_application(cli.config.as_deref())?;
-                        let transcript = application.transcribe_pending_dictation(pending).await?;
-                        write_dictate_output(output.as_deref(), &transcript)?;
-                    }
-                },
-                None => {
-                    let application = load_application(cli.config.as_deref())?;
-                    let transcript = if dictate.input.microphone {
-                        eprintln!("Recording from the Linux microphone. Press Enter to stop.");
-                        application.dictate_from_microphone().await?
-                    } else {
-                        let audio = read_binary_input(&dictate.input)?;
-                        application
-                            .dictate(
-                                audio,
-                                audio_format(dictate.format, dictate.input.file.as_deref()),
-                            )
-                            .await?
-                    };
-                    write_dictate_output(dictate.output.as_deref(), &transcript)?;
-                }
-            }
-        }
+        Command::Dictate(dictate) => handle_dictate(dictate, cli.config.as_deref()).await?,
         Command::Read { input } => {
             let application = load_application(cli.config.as_deref())?;
             let text = read_text_input(&input)?;
@@ -229,6 +184,70 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+async fn handle_dictate(
+    dictate: DictateCommand,
+    config_path: Option<&Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    dictate.validate()?;
+
+    match dictate.action {
+        Some(DictateAction::Start) => {
+            dictate_start_capture()?;
+            println!("{}", DictateState::Recording.as_str());
+        }
+        Some(DictateAction::Status) => {
+            let status = dictate_runtime_status()?;
+            println!("{}", status.state.as_str());
+        }
+        Some(DictateAction::Stop { output }) => {
+            let pending = dictate_stop_capture()?;
+            let application = load_application(config_path)?;
+            finish_dictation_capture(
+                &application,
+                DictateCaptureOutcome::Pending(pending),
+                output.as_deref(),
+            )
+            .await?;
+        }
+        Some(DictateAction::Toggle { output }) => {
+            let capture = dictate_toggle_capture()?;
+
+            match capture {
+                DictateCaptureOutcome::Started => {
+                    println!("{}", DictateState::Recording.as_str());
+                }
+                pending => {
+                    let application = load_application(config_path)?;
+                    finish_dictation_capture(&application, pending, output.as_deref()).await?;
+                }
+            }
+        }
+        None => {
+            let application = load_application(config_path)?;
+            let transcript = if dictate.input.microphone {
+                eprintln!("Recording from the Linux microphone. Press Enter to stop.");
+                application.dictate_from_microphone().await?
+            } else {
+                let audio = read_binary_input(&dictate.input)?;
+                application
+                    .dictate(
+                        audio,
+                        audio_format(dictate.format, dictate.input.file.as_deref()),
+                    )
+                    .await?
+            };
+
+            if dictate.input.microphone {
+                deliver_dictated_transcript(&application, dictate.output.as_deref(), &transcript)?;
+            } else {
+                write_dictate_output(dictate.output.as_deref(), &transcript)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn load_application(config_path: Option<&Path>) -> Result<Application, Box<dyn std::error::Error>> {
     let loaded = load_configuration(config_path)?;
     Ok(Application::from_loaded_configuration(&loaded)?)
@@ -262,21 +281,99 @@ fn read_binary_input(input: &BinaryInput) -> Result<Vec<u8>, io::Error> {
 }
 
 fn write_dictate_output(output: Option<&Path>, transcript: &str) -> Result<(), io::Error> {
+    let mut stdout = io::stdout();
+    write_dictate_output_to(output, transcript, &mut stdout)
+}
+
+fn write_dictate_output_to(
+    output: Option<&Path>,
+    transcript: &str,
+    stdout: &mut impl Write,
+) -> Result<(), io::Error> {
     if let Some(output) = output {
         write_text_output(output, transcript)?;
-        println!("{}", output.display());
+        writeln!(stdout, "{}", output.display())?;
     } else {
-        println!("{transcript}");
+        writeln!(stdout, "{transcript}")?;
     }
 
     Ok(())
 }
 
+fn deliver_dictated_transcript(
+    application: &Application,
+    output: Option<&Path>,
+    transcript: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut stdout = io::stdout();
+    let mut stderr = io::stderr();
+    deliver_dictated_transcript_with(
+        output,
+        transcript,
+        || {
+            application
+                .insert_dictated_text(transcript)
+                .map_err(|error| Box::new(error) as _)
+        },
+        &mut stdout,
+        &mut stderr,
+    )
+}
+
+async fn finish_dictation_capture(
+    application: &Application,
+    capture: DictateCaptureOutcome,
+    output: Option<&Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match capture {
+        DictateCaptureOutcome::Started => {
+            println!("{}", DictateState::Recording.as_str());
+            Ok(())
+        }
+        DictateCaptureOutcome::Pending(pending) => {
+            let transcript = application.transcribe_pending_dictation(pending).await?;
+            deliver_dictated_transcript(application, output, &transcript)
+        }
+    }
+}
+
+fn deliver_dictated_transcript_with<Insert, Stdout, Stderr>(
+    output: Option<&Path>,
+    transcript: &str,
+    insert_text: Insert,
+    stdout: &mut Stdout,
+    stderr: &mut Stderr,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    Insert: FnOnce() -> Result<(), Box<dyn std::error::Error>>,
+    Stdout: Write,
+    Stderr: Write,
+{
+    if let Some(output) = output {
+        write_dictate_output_to(Some(output), transcript, stdout)?;
+        return Ok(());
+    }
+
+    match insert_text() {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            writeln!(
+                stderr,
+                "Failed to insert the transcript into the focused application. Printing it to stdout instead."
+            )?;
+            writeln!(stdout, "{transcript}")?;
+            Err(error)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use clap::Parser;
 
-    use super::{Cli, Command, DictateAction};
+    use super::{Cli, Command, DictateAction, deliver_dictated_transcript_with};
 
     #[test]
     fn dictate_accepts_microphone_input() {
@@ -365,6 +462,61 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn dictate_delivery_preserves_transcript_when_insertion_fails() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let error = deliver_dictated_transcript_with(
+            None,
+            "final transcript",
+            || Err(Box::new(std::io::Error::other("insert failed"))),
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect_err("failed insertion should still return an error");
+
+        assert_eq!(error.to_string(), "insert failed");
+        assert_eq!(
+            String::from_utf8(stdout).expect("stdout should be utf8"),
+            "final transcript\n"
+        );
+        assert_eq!(
+            String::from_utf8(stderr).expect("stderr should be utf8"),
+            "Failed to insert the transcript into the focused application. Printing it to stdout instead.\n"
+        );
+    }
+
+    #[test]
+    fn dictate_delivery_skips_insertion_when_output_path_is_requested() {
+        let temp_path =
+            std::env::temp_dir().join(format!("lazy-allrounder-test-{}.txt", std::process::id()));
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let output = PathBuf::from(&temp_path);
+
+        deliver_dictated_transcript_with(
+            Some(output.as_path()),
+            "saved transcript",
+            || panic!("insertion should not be attempted when --output is used"),
+            &mut stdout,
+            &mut stderr,
+        )
+        .expect("file output path should bypass insertion");
+
+        assert_eq!(
+            std::fs::read_to_string(&temp_path).expect("transcript file should exist"),
+            "saved transcript"
+        );
+        assert_eq!(
+            String::from_utf8(stdout).expect("stdout should be utf8"),
+            format!("{}\n", temp_path.display())
+        );
+        assert!(stderr.is_empty());
+
+        std::fs::remove_file(temp_path).expect("temporary transcript file should be removed");
     }
 }
 

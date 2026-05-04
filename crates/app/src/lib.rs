@@ -5,7 +5,7 @@ use std::{
 
 use directories::ProjectDirs;
 use lazy_allrounder_core::config::{AppConfiguration, ProviderConfiguration};
-use lazy_allrounder_core::error::CoreError;
+use lazy_allrounder_core::error::{CoreError, PortError};
 use lazy_allrounder_core::services::{
     AskRequest, GeneratedAudio, ReadRequest, ReadService, TransformService,
 };
@@ -17,6 +17,7 @@ pub use lazy_allrounder_platform::{DictateState, DictateStatus};
 use lazy_allrounder_platform::{
     DictateToggleResult, PendingDictation, capture_microphone_until_enter, dictate_start,
     dictate_status as platform_dictate_status, dictate_stop, dictate_toggle,
+    insert_text_into_focused_app,
 };
 use serde::Deserialize;
 use thiserror::Error;
@@ -113,8 +114,14 @@ impl Application {
         self.transcribe_pending_dictation(pending).await
     }
 
+    pub fn insert_dictated_text(&self, transcript: &str) -> Result<(), AppError> {
+        insert_text_into_focused_app(transcript)
+            .map_err(CoreError::from)
+            .map_err(AppError::from)
+    }
+
     pub async fn read(&self, text: String) -> Result<Vec<u8>, AppError> {
-        let service = ReadService::new(self.tts_client.clone());
+        let service = self.read_service();
         let request = ReadRequest::new(text)?;
 
         service
@@ -124,7 +131,7 @@ impl Application {
     }
 
     pub async fn explain(&self, text: String) -> Result<GeneratedAudio, AppError> {
-        let service = TransformService::new(self.text_client.clone(), self.tts_client.clone());
+        let service = self.transform_service();
         let request = ReadRequest::new(text)?;
 
         service
@@ -134,7 +141,7 @@ impl Application {
     }
 
     pub async fn summarize(&self, text: String) -> Result<GeneratedAudio, AppError> {
-        let service = TransformService::new(self.text_client.clone(), self.tts_client.clone());
+        let service = self.transform_service();
         let request = ReadRequest::new(text)?;
 
         service
@@ -144,7 +151,7 @@ impl Application {
     }
 
     pub async fn ask(&self, text: String, question: String) -> Result<GeneratedAudio, AppError> {
-        let service = TransformService::new(self.text_client.clone(), self.tts_client.clone());
+        let service = self.transform_service();
         let request = AskRequest::new(text, question)?;
 
         service
@@ -170,34 +177,35 @@ impl Application {
             (Ok(_), Err(error)) => Err(error),
         }
     }
+
+    fn read_service(&self) -> ReadService<OpenRouterTextToSpeechClient> {
+        ReadService::new(self.tts_client.clone())
+    }
+
+    fn transform_service(
+        &self,
+    ) -> TransformService<OpenRouterTextClient, OpenRouterTextToSpeechClient> {
+        TransformService::new(self.text_client.clone(), self.tts_client.clone())
+    }
 }
 
 pub fn dictate_start_capture() -> Result<(), AppError> {
-    dictate_start()
-        .map_err(CoreError::from)
-        .map_err(AppError::from)
+    map_port_result(dictate_start())
 }
 
 pub fn dictate_stop_capture() -> Result<PendingDictation, AppError> {
-    dictate_stop()
-        .map_err(CoreError::from)
-        .map_err(AppError::from)
+    map_port_result(dictate_stop())
 }
 
 pub fn dictate_toggle_capture() -> Result<DictateCaptureOutcome, AppError> {
-    match dictate_toggle()
-        .map_err(CoreError::from)
-        .map_err(AppError::from)?
-    {
+    match map_port_result(dictate_toggle())? {
         DictateToggleResult::Started => Ok(DictateCaptureOutcome::Started),
         DictateToggleResult::Pending(pending) => Ok(DictateCaptureOutcome::Pending(pending)),
     }
 }
 
 pub fn dictate_runtime_status() -> Result<DictateStatus, AppError> {
-    platform_dictate_status()
-        .map_err(CoreError::from)
-        .map_err(AppError::from)
+    map_port_result(platform_dictate_status())
 }
 
 pub fn default_config_path() -> Result<PathBuf, AppError> {
@@ -299,6 +307,10 @@ fn ensure_provider(pipeline: &'static str, provider: &str) -> Result<(), AppErro
         pipeline,
         provider: provider.to_owned(),
     })
+}
+
+fn map_port_result<T>(result: Result<T, PortError>) -> Result<T, AppError> {
+    result.map_err(CoreError::from).map_err(AppError::from)
 }
 
 #[cfg(test)]

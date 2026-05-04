@@ -19,6 +19,10 @@
             rust-analyzer
             rustc
             rustfmt
+            wl-clipboard
+            wtype
+            xclip
+            xdotool
           ];
         };
 

@@ -6,7 +6,7 @@ Cross-platform voice AI in Rust for dictation, speech-to-text, text-to-speech, a
 
 `lazy-allrounder` combines the ideas behind `whisper-nix` and `lazy-reader-nix` into a single OS-agnostic CLI-first application for Windows, macOS, and Linux.
 
-The project currently supports hosted CLI workflows. Dictation is available as a real audio-file-or-stdin transcription flow, and Linux now has an early real dictate runtime with microphone capture plus `start` / `stop` / `toggle` / `status` lifecycle commands. Hotkeys and native playback are intentionally not exposed until the platform adapters are real.
+The project currently supports hosted CLI workflows. Dictation is available as a real audio-file-or-stdin transcription flow, and Linux now has an early real dictate runtime with microphone capture plus `start` / `stop` / `toggle` / `status` lifecycle commands. Linux microphone-driven dictation now attempts to insert the final transcript into the focused application by default. Hotkeys and native playback are intentionally not exposed until the platform adapters are real.
 
 ## Project status
 
@@ -103,7 +103,7 @@ cargo run -p lazy-allrounder-cli -- summarize --file ./README.md
 cargo run -p lazy-allrounder-cli -- ask --file ./README.md --question "What does this project do?"
 ```
 
-`dictate` prints the transcript to stdout by default, or writes it to `--output`. On Linux, `dictate --microphone` records from `pw-record` until you press Enter, then sends the captured WAV to OpenRouter STT. The Linux runtime commands use a visible state file at `$XDG_RUNTIME_DIR/lazy-allrounder-dictate.state` and currently report `idle`, `recording`, or `transcribing`. `dictate start` and `dictate status` do not need model credentials, but `dictate stop`, `dictate toggle` (when stopping), and the one-shot transcription paths still need the normal STT config and API key. The text-to-speech commands write audio to `lazy-allrounder-<command>.mp3` by default. Use `--output <path>` to choose another file.
+`dictate` prints the transcript to stdout by default, or writes it to `--output`. On Linux, `dictate --microphone`, `dictate stop`, and `dictate toggle` now try to insert the transcript into the focused application when `--output` is not set. The primary path uses direct typing, and the fallback path stages the transcript on the clipboard and tries a paste shortcut. If insertion still fails, the CLI prints the transcript so it is not lost. `dictate --microphone` records from `pw-record` until you press Enter, then sends the captured WAV to OpenRouter STT. The Linux runtime commands use a visible state file at `$XDG_RUNTIME_DIR/lazy-allrounder-dictate.state` and currently report `idle`, `recording`, or `transcribing`. `dictate start` and `dictate status` do not need model credentials, but `dictate stop`, `dictate toggle` (when stopping), and the one-shot transcription paths still need the normal STT config and API key. The text-to-speech commands write audio to `lazy-allrounder-<command>.mp3` by default. Use `--output <path>` to choose another file.
 
 ## Security and public repo hygiene
 
