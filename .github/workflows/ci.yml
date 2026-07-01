@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            libasound2-dev \
+            libdbus-1-dev \
+            libxkbcommon-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        run: cargo test --workspace
+
+      - name: Build release binaries
+        run: cargo build --release -p lazy-allrounder-cli -p lazy-allrounder-gui
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: lazy-allrounder-${{ matrix.os }}
+          path: |
+            target/release/lazy-allrounder*
+          if-no-files-found: error
+
+  lint:
+    name: Format and lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            libasound2-dev \
+            libdbus-1-dev \
+            libxkbcommon-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace -- -D warnings

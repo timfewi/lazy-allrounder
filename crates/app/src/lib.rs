@@ -4,7 +4,10 @@ use std::{
 };
 
 use directories::ProjectDirs;
-use lazy_allrounder_core::config::{AppConfiguration, ProviderConfiguration};
+use lazy_allrounder_core::config::{
+    AppConfiguration, HotkeysConfiguration, OverlayConfiguration, OverlayCorner,
+    ProviderConfiguration,
+};
 use lazy_allrounder_core::error::{CoreError, PortError};
 use lazy_allrounder_core::services::{
     AskRequest, GeneratedAudio, ReadRequest, ReadService, TransformService,
@@ -85,12 +88,13 @@ impl Application {
 
         let shared_client =
             OpenRouterClient::from_env().map_err(|error| AppError::Provider(error.to_string()))?;
+        let tts_voice = config.tts.voice.clone();
 
         Ok(Self {
             config,
             stt_client: OpenRouterSpeechToTextClient::new(shared_client.clone()),
             text_client: OpenRouterTextClient::new(shared_client.clone()),
-            tts_client: OpenRouterTextToSpeechClient::new(shared_client),
+            tts_client: OpenRouterTextToSpeechClient::with_voice(shared_client, tts_voice),
         })
     }
 
@@ -258,13 +262,61 @@ pub fn parse_configuration(raw: &str, path: &Path) -> Result<AppConfiguration, A
 struct RawProviderConfiguration {
     provider: Option<String>,
     model: Option<String>,
+    voice: Option<String>,
 }
 
 impl RawProviderConfiguration {
     fn merge_with_defaults(self, defaults: ProviderConfiguration) -> ProviderConfiguration {
+        // A user-picked model gets a user-picked (or unset) voice: falling
+        // back to the default voice would pair it with the wrong model.
+        let voice = if self.model.is_some() {
+            self.voice
+        } else {
+            self.voice.or(defaults.voice)
+        };
+
         ProviderConfiguration {
             provider: self.provider.unwrap_or(defaults.provider),
             model: self.model.unwrap_or(defaults.model),
+            voice,
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawOverlayConfiguration {
+    enabled: Option<bool>,
+    corner: Option<OverlayCorner>,
+}
+
+impl RawOverlayConfiguration {
+    fn merge_with_defaults(self, defaults: OverlayConfiguration) -> OverlayConfiguration {
+        OverlayConfiguration {
+            enabled: self.enabled.unwrap_or(defaults.enabled),
+            corner: self.corner.unwrap_or(defaults.corner),
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawHotkeysConfiguration {
+    read: Option<String>,
+    summarize: Option<String>,
+    explain: Option<String>,
+    ask: Option<String>,
+    dictate: Option<String>,
+}
+
+impl RawHotkeysConfiguration {
+    fn merge_with_defaults(self, defaults: HotkeysConfiguration) -> HotkeysConfiguration {
+        HotkeysConfiguration {
+            read: self.read.unwrap_or(defaults.read),
+            summarize: self.summarize.unwrap_or(defaults.summarize),
+            explain: self.explain.unwrap_or(defaults.explain),
+            ask: self.ask.unwrap_or(defaults.ask),
+            dictate: self.dictate.unwrap_or(defaults.dictate),
         }
     }
 }
@@ -275,6 +327,8 @@ struct RawAppConfiguration {
     text: Option<RawProviderConfiguration>,
     stt: Option<RawProviderConfiguration>,
     tts: Option<RawProviderConfiguration>,
+    overlay: Option<RawOverlayConfiguration>,
+    hotkeys: Option<RawHotkeysConfiguration>,
 }
 
 impl RawAppConfiguration {
@@ -294,6 +348,14 @@ impl RawAppConfiguration {
                 .tts
                 .unwrap_or_default()
                 .merge_with_defaults(defaults.tts),
+            overlay: self
+                .overlay
+                .unwrap_or_default()
+                .merge_with_defaults(defaults.overlay),
+            hotkeys: self
+                .hotkeys
+                .unwrap_or_default()
+                .merge_with_defaults(defaults.hotkeys),
         }
     }
 }
@@ -339,12 +401,99 @@ mod tests {
     fn rejects_unknown_top_level_keys() {
         let error = parse_configuration(
             r#"
-            [hotkeys]
+            [shortcuts]
             read = "Super+S"
             "#,
             Path::new("config.toml"),
         )
         .expect_err("unknown keys should fail");
+
+        assert!(matches!(error, super::AppError::ParseConfig { .. }));
+    }
+
+    #[test]
+    fn parses_hotkeys_section_and_keeps_defaults() {
+        let config = parse_configuration(
+            r#"
+            [hotkeys]
+            read = "ctrl+shift+r"
+            dictate = ""
+            "#,
+            Path::new("config.toml"),
+        )
+        .expect("hotkeys config should parse");
+
+        assert_eq!(config.hotkeys.read, "ctrl+shift+r");
+        assert_eq!(config.hotkeys.summarize, "super+w");
+        // An empty binding disables the action.
+        assert!(
+            !config
+                .hotkeys
+                .enabled_bindings()
+                .iter()
+                .any(|(action, _)| action == "dictate")
+        );
+    }
+
+    #[test]
+    fn parses_tts_voice_and_defaults_pair_model_with_voice() {
+        let config = parse_configuration(
+            r#"
+            [tts]
+            model = "zyphra/zonos-v0.1-transformer"
+            voice = "american_female"
+            "#,
+            Path::new("config.toml"),
+        )
+        .expect("tts voice should parse");
+        assert_eq!(config.tts.voice.as_deref(), Some("american_female"));
+
+        // Defaults stay paired: no [tts] section keeps kokoro + its voice.
+        let defaults =
+            parse_configuration("", Path::new("config.toml")).expect("empty config parses");
+        assert_eq!(defaults.tts.model, "hexgrad/kokoro-82m");
+        assert_eq!(defaults.tts.voice.as_deref(), Some("af_heart"));
+
+        // A custom model without a voice must NOT inherit the default voice.
+        let custom = parse_configuration(
+            r#"
+            [tts]
+            model = "some/other-model"
+            "#,
+            Path::new("config.toml"),
+        )
+        .expect("custom model parses");
+        assert_eq!(custom.tts.voice, None);
+    }
+
+    #[test]
+    fn parses_overlay_section_and_keeps_defaults() {
+        let config = parse_configuration(
+            r#"
+            [overlay]
+            corner = "top-left"
+            "#,
+            Path::new("config.toml"),
+        )
+        .expect("overlay config should parse");
+
+        assert!(config.overlay.enabled);
+        assert_eq!(
+            config.overlay.corner,
+            lazy_allrounder_core::config::OverlayCorner::TopLeft
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_overlay_corner() {
+        let error = parse_configuration(
+            r#"
+            [overlay]
+            corner = "middle"
+            "#,
+            Path::new("config.toml"),
+        )
+        .expect_err("invalid corner should fail");
 
         assert!(matches!(error, super::AppError::ParseConfig { .. }));
     }

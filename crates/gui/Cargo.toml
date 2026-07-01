@@ -1,0 +1,22 @@
+[package]
+name = "lazy-allrounder-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+eframe.workspace = true
+egui.workspace = true
+lazy-allrounder-app = { path = "../app" }
+lazy-allrounder-core = { path = "../core" }
+lazy-allrounder-platform = { path = "../platform" }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tray-icon.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# tray-icon's Linux backend is GTK-based; the tray event loop must run a GTK
+# main loop, which requires depending on the same gtk version tray-icon uses.
+gtk = "0.18"

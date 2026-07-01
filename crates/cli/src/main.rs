@@ -64,9 +64,13 @@ impl DictateCommand {
         let has_input_flags =
             self.input.microphone || self.input.stdin || self.input.file.is_some();
 
-        let Some(_) = &self.action else {
+        let Some(action) = &self.action else {
             return Ok(());
         };
+
+        if let DictateAction::Hotkey(hotkey) = action {
+            hotkey.validate()?;
+        }
 
         if has_input_flags || self.format.is_some() {
             return Err(io::Error::new(
@@ -88,6 +92,7 @@ impl DictateCommand {
 
 #[derive(Debug, Subcommand)]
 enum DictateAction {
+    Hotkey(HotkeyCommand),
     Start,
     Stop {
         #[arg(long, short = 'o')]
@@ -98,6 +103,34 @@ enum DictateAction {
         output: Option<PathBuf>,
     },
     Status,
+}
+
+#[derive(Debug, clap::Args)]
+struct HotkeyCommand {
+    #[arg(long, value_enum, default_value_t = HotkeyMode::Toggle)]
+    mode: HotkeyMode,
+    #[arg(long, short = 'o')]
+    output: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum HotkeyMode {
+    Toggle,
+    Start,
+    Stop,
+}
+
+impl HotkeyCommand {
+    fn validate(&self) -> Result<(), io::Error> {
+        if self.mode == HotkeyMode::Start && self.output.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "hotkey start mode cannot be combined with --output",
+            ));
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, clap::Args)]
@@ -191,6 +224,7 @@ async fn handle_dictate(
     dictate.validate()?;
 
     match dictate.action {
+        Some(DictateAction::Hotkey(hotkey)) => handle_hotkey(hotkey, config_path).await?,
         Some(DictateAction::Start) => {
             dictate_start_capture()?;
             println!("{}", DictateState::Recording.as_str());
@@ -242,6 +276,44 @@ async fn handle_dictate(
             } else {
                 write_dictate_output(dictate.output.as_deref(), &transcript)?;
             }
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_hotkey(
+    hotkey: HotkeyCommand,
+    config_path: Option<&Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match hotkey.mode {
+        HotkeyMode::Toggle => {
+            let capture = dictate_toggle_capture()?;
+
+            match capture {
+                DictateCaptureOutcome::Started => {
+                    println!("{}", DictateState::Recording.as_str());
+                }
+                pending => {
+                    let application = load_application(config_path)?;
+                    finish_dictation_capture(&application, pending, hotkey.output.as_deref())
+                        .await?;
+                }
+            }
+        }
+        HotkeyMode::Start => {
+            dictate_start_capture()?;
+            println!("{}", DictateState::Recording.as_str());
+        }
+        HotkeyMode::Stop => {
+            let pending = dictate_stop_capture()?;
+            let application = load_application(config_path)?;
+            finish_dictation_capture(
+                &application,
+                DictateCaptureOutcome::Pending(pending),
+                hotkey.output.as_deref(),
+            )
+            .await?;
         }
     }
 
@@ -367,13 +439,104 @@ where
     }
 }
 
+fn audio_format(format: Option<AudioFormat>, path: Option<&Path>) -> &'static str {
+    match format {
+        Some(AudioFormat::Wav) => "wav",
+        Some(AudioFormat::Mp3) => "mp3",
+        Some(AudioFormat::Flac) => "flac",
+        Some(AudioFormat::M4a) => "m4a",
+        Some(AudioFormat::Ogg) => "ogg",
+        Some(AudioFormat::Webm) => "webm",
+        Some(AudioFormat::Aac) => "aac",
+        None => match path
+            .and_then(Path::extension)
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("mp3") => "mp3",
+            Some("flac") => "flac",
+            Some("m4a") => "m4a",
+            Some("ogg") => "ogg",
+            Some("webm") => "webm",
+            Some("aac") => "aac",
+            _ => "wav",
+        },
+    }
+}
+
+fn read_text_input(input: &TextInput) -> Result<String, io::Error> {
+    if input.stdin {
+        let mut buffer = String::new();
+        io::stdin().read_to_string(&mut buffer)?;
+        return Ok(buffer);
+    }
+
+    match &input.file {
+        Some(path) => fs::read_to_string(path),
+        None => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "either --stdin or --file must be provided",
+        )),
+    }
+}
+
+fn write_audio_output(
+    command_name: &str,
+    output: Option<&Path>,
+    audio: &[u8],
+) -> Result<PathBuf, io::Error> {
+    let path = match output {
+        Some(path) => path.to_path_buf(),
+        None => PathBuf::from(format!("lazy-allrounder-{command_name}.mp3")),
+    };
+
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|error| {
+            if error.kind() == ErrorKind::AlreadyExists {
+                io::Error::new(
+                    ErrorKind::AlreadyExists,
+                    format!(
+                        "{} already exists; choose --output explicitly",
+                        path.display()
+                    ),
+                )
+            } else {
+                error
+            }
+        })?;
+    file.write_all(audio)?;
+    Ok(path)
+}
+
+fn write_text_output(path: &Path, text: &str) -> Result<(), io::Error> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| {
+            if error.kind() == ErrorKind::AlreadyExists {
+                io::Error::new(
+                    ErrorKind::AlreadyExists,
+                    format!("{} already exists; choose another --output", path.display()),
+                )
+            } else {
+                error
+            }
+        })?;
+    file.write_all(text.as_bytes())
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
     use clap::Parser;
 
-    use super::{Cli, Command, DictateAction, deliver_dictated_transcript_with};
+    use super::{Cli, Command, DictateAction, HotkeyMode, deliver_dictated_transcript_with};
 
     #[test]
     fn dictate_accepts_microphone_input() {
@@ -427,6 +590,91 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn dictate_hotkey_defaults_to_toggle_mode() {
+        let cli = Cli::try_parse_from(["lazy-allrounder", "dictate", "hotkey"])
+            .expect("hotkey should parse");
+
+        assert!(matches!(
+            cli.command,
+            Command::Dictate(super::DictateCommand {
+                action: Some(DictateAction::Hotkey(super::HotkeyCommand {
+                    mode: HotkeyMode::Toggle,
+                    output: None,
+                })),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn dictate_hotkey_accepts_explicit_start_mode() {
+        let cli = Cli::try_parse_from(["lazy-allrounder", "dictate", "hotkey", "--mode", "start"])
+            .expect("hotkey start mode should parse");
+
+        assert!(matches!(
+            cli.command,
+            Command::Dictate(super::DictateCommand {
+                action: Some(DictateAction::Hotkey(super::HotkeyCommand {
+                    mode: HotkeyMode::Start,
+                    ..
+                })),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn dictate_hotkey_accepts_output_after_subcommand() {
+        let cli = Cli::try_parse_from([
+            "lazy-allrounder",
+            "dictate",
+            "hotkey",
+            "--output",
+            "transcript.txt",
+        ])
+        .expect("hotkey output should parse");
+
+        assert!(matches!(
+            cli.command,
+            Command::Dictate(super::DictateCommand {
+                action: Some(DictateAction::Hotkey(super::HotkeyCommand {
+                    mode: HotkeyMode::Toggle,
+                    output: Some(_),
+                })),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn dictate_hotkey_rejects_output_in_start_mode() {
+        let cli = Cli::try_parse_from([
+            "lazy-allrounder",
+            "dictate",
+            "hotkey",
+            "--mode",
+            "start",
+            "--output",
+            "transcript.txt",
+        ])
+        .expect("clap should parse hotkey start mode before custom validation");
+
+        let Command::Dictate(dictate) = cli.command else {
+            panic!("expected dictate command");
+        };
+
+        let error = dictate
+            .validate()
+            .expect_err("hotkey start mode should reject output during command validation");
+
+        assert!(
+            error
+                .to_string()
+                .contains("hotkey start mode cannot be combined with --output")
+        );
     }
 
     #[test]
@@ -518,95 +766,4 @@ mod tests {
 
         std::fs::remove_file(temp_path).expect("temporary transcript file should be removed");
     }
-}
-
-fn audio_format(format: Option<AudioFormat>, path: Option<&Path>) -> &'static str {
-    match format {
-        Some(AudioFormat::Wav) => "wav",
-        Some(AudioFormat::Mp3) => "mp3",
-        Some(AudioFormat::Flac) => "flac",
-        Some(AudioFormat::M4a) => "m4a",
-        Some(AudioFormat::Ogg) => "ogg",
-        Some(AudioFormat::Webm) => "webm",
-        Some(AudioFormat::Aac) => "aac",
-        None => match path
-            .and_then(Path::extension)
-            .and_then(|ext| ext.to_str())
-            .map(|ext| ext.to_ascii_lowercase())
-            .as_deref()
-        {
-            Some("mp3") => "mp3",
-            Some("flac") => "flac",
-            Some("m4a") => "m4a",
-            Some("ogg") => "ogg",
-            Some("webm") => "webm",
-            Some("aac") => "aac",
-            _ => "wav",
-        },
-    }
-}
-
-fn read_text_input(input: &TextInput) -> Result<String, io::Error> {
-    if input.stdin {
-        let mut buffer = String::new();
-        io::stdin().read_to_string(&mut buffer)?;
-        return Ok(buffer);
-    }
-
-    match &input.file {
-        Some(path) => fs::read_to_string(path),
-        None => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "either --stdin or --file must be provided",
-        )),
-    }
-}
-
-fn write_audio_output(
-    command_name: &str,
-    output: Option<&Path>,
-    audio: &[u8],
-) -> Result<PathBuf, io::Error> {
-    let path = match output {
-        Some(path) => path.to_path_buf(),
-        None => PathBuf::from(format!("lazy-allrounder-{command_name}.mp3")),
-    };
-
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .map_err(|error| {
-            if error.kind() == ErrorKind::AlreadyExists {
-                io::Error::new(
-                    ErrorKind::AlreadyExists,
-                    format!(
-                        "{} already exists; choose --output explicitly",
-                        path.display()
-                    ),
-                )
-            } else {
-                error
-            }
-        })?;
-    file.write_all(audio)?;
-    Ok(path)
-}
-
-fn write_text_output(path: &Path, text: &str) -> Result<(), io::Error> {
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|error| {
-            if error.kind() == ErrorKind::AlreadyExists {
-                io::Error::new(
-                    ErrorKind::AlreadyExists,
-                    format!("{} already exists; choose another --output", path.display()),
-                )
-            } else {
-                error
-            }
-        })?;
-    file.write_all(text.as_bytes())
 }

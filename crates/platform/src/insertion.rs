@@ -3,7 +3,6 @@
 // modules are added, and keep text_insertion.rs as the cross-platform entrypoint.
 use std::{
     env,
-    ffi::OsStr,
     io::{self, Write},
     process::{Command, Stdio},
 };
@@ -144,23 +143,15 @@ fn detect_session_kind(
     wayland_display: Option<std::ffi::OsString>,
     display: Option<std::ffi::OsString>,
 ) -> Result<SessionKind, PortError> {
-    if is_present_env_value(wayland_display.as_deref()) {
-        return Ok(SessionKind::Wayland);
+    match crate::display::detect(wayland_display, display) {
+        Some(crate::display::SessionKind::Wayland) => Ok(SessionKind::Wayland),
+        Some(crate::display::SessionKind::X11) => Ok(SessionKind::X11),
+        None => Err(PortError::Other {
+            message:
+                "focused-app insertion requires a graphical Linux session with WAYLAND_DISPLAY or DISPLAY set"
+                    .to_owned(),
+        }),
     }
-
-    if is_present_env_value(display.as_deref()) {
-        return Ok(SessionKind::X11);
-    }
-
-    Err(PortError::Other {
-        message:
-            "focused-app insertion requires a graphical Linux session with WAYLAND_DISPLAY or DISPLAY set"
-                .to_owned(),
-    })
-}
-
-fn is_present_env_value(value: Option<&OsStr>) -> bool {
-    value.is_some_and(|value| !value.is_empty())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

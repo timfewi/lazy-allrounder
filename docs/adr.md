@@ -46,6 +46,7 @@ Owns OS-dependent capabilities.
 
 - microphone capture
 - focused-app insertion
+- clipboard access
 - playback
 - hotkeys
 - notifications

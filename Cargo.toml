@@ -3,6 +3,7 @@ members = [
   "crates/app",
   "crates/cli",
   "crates/core",
+  "crates/gui",
   "crates/integrations",
   "crates/platform",
   "xtask",
@@ -11,6 +12,7 @@ default-members = [
   "crates/app",
   "crates/cli",
   "crates/core",
+  "crates/gui",
   "crates/integrations",
   "crates/platform",
 ]
@@ -23,14 +25,27 @@ rust-version = "1.94"
 version = "0.1.0"
 
 [workspace.dependencies]
+arboard = "3.6.1"
 async-trait = "0.1.89"
+eframe = { version = "0.34", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
+egui = "0.34"
+global-hotkey = "0.8"
+notify-rust = "4"
 base64 = "0.22.1"
 clap = { version = "4.6.1", features = ["derive"] }
 directories = "6.0.0"
 reqwest = { version = "0.13.3", default-features = false, features = ["json", "rustls"] }
+rodio = "0.22.2"
 serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1"
 thiserror = "2.0.18"
 tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread"] }
 toml = "1.1.2"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+# NOTE: tray-icon 0.24.1 has no pure-Rust "linux-ksni" feature (that was an
+# incorrect assumption from earlier research) — real feature list is
+# common-controls-v6/default/gtk/libxdo/serde. Default features pull in GTK
+# on Linux; revisit lighter Linux tray backends (e.g. the `ksni` crate
+# directly) as a follow-up if the GTK dependency proves too heavy in practice.
+tray-icon = "0.24.1"

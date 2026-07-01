@@ -6,4 +6,9 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+arboard.workspace = true
+global-hotkey.workspace = true
 lazy-allrounder-core = { path = "../core" }
+notify-rust.workspace = true
+rodio.workspace = true
+tracing.workspace = true

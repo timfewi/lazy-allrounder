@@ -10,7 +10,8 @@ use lazy_allrounder_core::{
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 
-const DEFAULT_TTS_VOICE: &str = "alloy";
+// Matches the default TTS model (hexgrad/kokoro-82m) in core's config.
+const DEFAULT_TTS_VOICE: &str = "af_heart";
 const DEFAULT_TTS_RESPONSE_FORMAT: &str = "mp3";
 
 #[derive(Debug, Clone)]
@@ -106,7 +107,7 @@ impl TextGenerationPort for OpenRouterTextClient {
         let status = response.status();
 
         if !status.is_success() {
-            return Err(map_status_error(status));
+            return Err(error_from_response(status, response).await);
         }
 
         let parsed: ChatCompletionResponse = response.json().await.map_err(map_request_error)?;
@@ -114,7 +115,7 @@ impl TextGenerationPort for OpenRouterTextClient {
             .choices
             .into_iter()
             .next()
-            .ok_or_else(|| PortError::MalformedResponse)?;
+            .ok_or(PortError::MalformedResponse)?;
 
         extract_message_text(choice.message)
     }
@@ -123,11 +124,22 @@ impl TextGenerationPort for OpenRouterTextClient {
 #[derive(Debug, Clone)]
 pub struct OpenRouterTextToSpeechClient {
     client: OpenRouterClient,
+    voice: Option<String>,
 }
 
 impl OpenRouterTextToSpeechClient {
     pub fn new(client: OpenRouterClient) -> Self {
-        Self { client }
+        Self {
+            client,
+            voice: None,
+        }
+    }
+
+    /// Voice is provider- and model-specific (kokoro wants "af_heart",
+    /// OpenAI-style models want "alloy"), so it is set per client rather
+    /// than threaded through the domain port.
+    pub fn with_voice(client: OpenRouterClient, voice: Option<String>) -> Self {
+        Self { client, voice }
     }
 }
 
@@ -137,7 +149,7 @@ impl TextToSpeechPort for OpenRouterTextToSpeechClient {
         let request = TextToSpeechRequest {
             model,
             input: text,
-            voice: DEFAULT_TTS_VOICE,
+            voice: self.voice.as_deref().unwrap_or(DEFAULT_TTS_VOICE),
             response_format: DEFAULT_TTS_RESPONSE_FORMAT,
             speed: Some(1.0),
         };
@@ -152,7 +164,7 @@ impl TextToSpeechPort for OpenRouterTextToSpeechClient {
         let status = response.status();
 
         if !status.is_success() {
-            return Err(map_status_error(status));
+            return Err(error_from_response(status, response).await);
         }
 
         let bytes = response.bytes().await.map_err(map_request_error)?;
@@ -194,7 +206,7 @@ impl OpenRouterSpeechToTextClient {
         let status = response.status();
 
         if !status.is_success() {
-            return Err(map_status_error(status));
+            return Err(error_from_response(status, response).await);
         }
 
         let parsed: SpeechToTextResponse = response.json().await.map_err(map_request_error)?;
@@ -250,7 +262,7 @@ struct ChatContentPart {
 struct TextToSpeechRequest<'a> {
     model: &'a str,
     input: &'a str,
-    voice: &'static str,
+    voice: &'a str,
     response_format: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     speed: Option<f32>,
@@ -346,4 +358,38 @@ fn map_status_error(status: StatusCode) -> PortError {
             message: format!("OpenRouter request failed with status {status}."),
         },
     }
+}
+
+/// Like `map_status_error`, but includes OpenRouter's error message for the
+/// catch-all case — a bare "400 Bad Request" hides the actual cause (wrong
+/// model slug, invalid voice, malformed input).
+async fn error_from_response(status: StatusCode, response: reqwest::Response) -> PortError {
+    let fallback = map_status_error(status);
+    if !matches!(fallback, PortError::Other { .. }) {
+        return fallback;
+    }
+
+    let body = response.text().await.unwrap_or_default();
+    let detail = serde_json::from_str::<OpenRouterErrorResponse>(&body)
+        .map(|parsed| parsed.error.message)
+        .unwrap_or(body);
+    let detail: String = detail.chars().take(300).collect();
+
+    if detail.trim().is_empty() {
+        return fallback;
+    }
+
+    PortError::Other {
+        message: format!("OpenRouter request failed with status {status}: {detail}"),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterErrorResponse {
+    error: OpenRouterErrorDetail,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterErrorDetail {
+    message: String,
 }

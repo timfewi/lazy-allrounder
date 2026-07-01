@@ -5,6 +5,12 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+# Users invoke the CLI as plain `lazy-allrounder` (matching the README and
+# hotkey setup docs); the package keeps its -cli suffix to stay unambiguous.
+[[bin]]
+name = "lazy-allrounder"
+path = "src/main.rs"
+
 [dependencies]
 clap.workspace = true
 lazy-allrounder-app = { path = "../app" }

@@ -11,4 +11,5 @@ base64.workspace = true
 lazy-allrounder-core = { path = "../core" }
 reqwest.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 tracing.workspace = true
