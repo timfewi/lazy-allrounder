@@ -7,7 +7,9 @@ rust-version.workspace = true
 
 [dependencies]
 arboard.workspace = true
+auto-launch.workspace = true
 global-hotkey.workspace = true
+keyring.workspace = true
 lazy-allrounder-core = { path = "../core" }
 notify-rust.workspace = true
 rodio.workspace = true

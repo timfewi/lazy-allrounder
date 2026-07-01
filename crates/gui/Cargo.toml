@@ -4,6 +4,18 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+description = "Floating voice-AI overlay: read aloud, summarize, explain, ask, and dictate anywhere"
+
+# Native installer definitions consumed by `cargo packager` in the release
+# workflow (NSIS on Windows, .dmg/.app on macOS, .deb/AppImage on Linux).
+[package.metadata.packager]
+productName = "Lazy Allrounder"
+identifier = "dev.timfewi.lazy-allrounder"
+category = "Utility"
+homepage = "https://github.com/timfewi/lazy-allrounder"
+icons = ["../../assets/icon.png", "../../assets/icon.ico", "../../assets/icon.icns"]
+licenseFile = "../../LICENSE"
+beforePackagingCommand = "cargo build --release -p lazy-allrounder-gui"
 
 [dependencies]
 eframe.workspace = true

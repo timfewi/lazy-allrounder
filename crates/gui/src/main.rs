@@ -1,4 +1,5 @@
-use lazy_allrounder_app::{Application, load_configuration};
+use lazy_allrounder_app::{Application, ensure_configuration_file};
+use lazy_allrounder_core::config::AppConfiguration;
 use lazy_allrounder_platform::AudioPlayer;
 use tracing_subscriber::{EnvFilter, fmt};
 
@@ -17,21 +18,14 @@ fn main() {
 
     let player = AudioPlayer::new();
 
-    // Configuration/credential problems must not kill the GUI before it can
-    // tell the user what is wrong — the overlay starts either way and shows
-    // the error in its panel.
-    let (application, startup_error, overlay_config, hotkeys_config) = match load_application() {
-        Ok((application, overlay_config, hotkeys_config)) => {
-            (Some(application), None, overlay_config, hotkeys_config)
-        }
+    // A missing config file is auto-provisioned with defaults; a broken one
+    // falls back to defaults here and surfaces its error in the panel when
+    // the overlay retries. The GUI must always be able to start.
+    let config = match ensure_configuration_file(None) {
+        Ok(loaded) => loaded.config,
         Err(error) => {
-            tracing::error!("starting unconfigured: {error}");
-            (
-                None,
-                Some(error.to_string()),
-                Default::default(),
-                Default::default(),
-            )
+            tracing::warn!("using default configuration: {error}");
+            AppConfiguration::default()
         }
     };
 
@@ -41,11 +35,15 @@ fn main() {
     // strictly worse than a floating window.
     let force_tray = std::env::var("LAZY_ALLROUNDER_UI").is_ok_and(|ui| ui == "tray");
     if force_tray {
-        let Some(application) = application else {
-            tracing::error!("tray mode requires a working configuration");
-            std::process::exit(1);
-        };
-        tray::run(application, player);
+        let application = ensure_configuration_file(None)
+            .and_then(|loaded| Application::from_loaded_configuration(&loaded));
+        match application {
+            Ok(application) => tray::run(application, player),
+            Err(error) => {
+                tracing::error!("tray mode requires a working configuration: {error}");
+                std::process::exit(1);
+            }
+        }
         return;
     }
 
@@ -57,28 +55,8 @@ fn main() {
         );
     }
 
-    if let Err(error) = overlay::run(
-        application,
-        startup_error,
-        overlay_config.corner,
-        hotkeys_config,
-        player,
-    ) {
+    if let Err(error) = overlay::run(config.overlay.corner, config.hotkeys.clone(), player) {
         tracing::error!("the overlay window failed: {error}");
         std::process::exit(1);
     }
-}
-
-type LoadOutcome = (
-    Application,
-    lazy_allrounder_core::config::OverlayConfiguration,
-    lazy_allrounder_core::config::HotkeysConfiguration,
-);
-
-fn load_application() -> Result<LoadOutcome, Box<dyn std::error::Error>> {
-    let loaded = load_configuration(None)?;
-    let overlay_config = loaded.config.overlay;
-    let hotkeys_config = loaded.config.hotkeys.clone();
-    let application = Application::from_loaded_configuration(&loaded)?;
-    Ok((application, overlay_config, hotkeys_config))
 }

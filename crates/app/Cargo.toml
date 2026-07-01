@@ -13,3 +13,4 @@ lazy-allrounder-platform = { path = "../platform" }
 serde.workspace = true
 thiserror.workspace = true
 toml.workspace = true
+tracing.workspace = true

@@ -52,6 +52,14 @@ pub enum AppError {
     Core(#[from] CoreError),
     #[error("provider initialization failed: {0}")]
     Provider(String),
+    #[error("no OpenRouter API key found — set OPENROUTER_API_KEY or save a key in the app panel")]
+    MissingApiKey,
+    #[error("failed to write configuration file at {path}: {source}")]
+    WriteConfig {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -86,8 +94,9 @@ impl Application {
         ensure_provider("stt", &config.stt.provider)?;
         ensure_provider("tts", &config.tts.provider)?;
 
-        let shared_client =
-            OpenRouterClient::from_env().map_err(|error| AppError::Provider(error.to_string()))?;
+        let api_key = resolve_api_key().ok_or(AppError::MissingApiKey)?;
+        let shared_client = OpenRouterClient::with_api_key(api_key)
+            .map_err(|error| AppError::Provider(error.to_string()))?;
         let tts_voice = config.tts.voice.clone();
 
         Ok(Self {
@@ -218,6 +227,58 @@ pub fn default_config_path() -> Result<PathBuf, AppError> {
     };
 
     Ok(project_dirs.config_dir().join("config.toml"))
+}
+
+/// The OpenRouter API key, if one is available: the environment variable
+/// wins (power users, scripts, CI), then the OS keyring (saved through the
+/// app panel's onboarding).
+pub fn resolve_api_key() -> Option<String> {
+    if let Ok(from_env) = std::env::var("OPENROUTER_API_KEY")
+        && !from_env.trim().is_empty()
+    {
+        return Some(from_env);
+    }
+
+    match lazy_allrounder_platform::load_api_key() {
+        Ok(stored) => stored,
+        Err(error) => {
+            tracing::warn!("could not check the OS keyring for an API key: {error}");
+            None
+        }
+    }
+}
+
+/// Saves the key to the OS keyring for future runs.
+pub fn store_api_key(api_key: &str) -> Result<(), AppError> {
+    lazy_allrounder_platform::store_api_key(api_key)
+        .map_err(|error| AppError::Provider(error.to_string()))
+}
+
+/// Loads the configuration, writing a default config file first if none
+/// exists — so a fresh GUI install works without hand-editing TOML. The CLI
+/// keeps using `load_configuration` directly and stays strict.
+pub fn ensure_configuration_file(path: Option<&Path>) -> Result<LoadedConfiguration, AppError> {
+    let loaded = load_configuration(path)?;
+    if loaded.exists {
+        return Ok(loaded);
+    }
+
+    let serialized = toml::to_string_pretty(&loaded.config).expect("defaults always serialize");
+    if let Some(parent) = loaded.path.parent() {
+        fs::create_dir_all(parent).map_err(|source| AppError::WriteConfig {
+            path: loaded.path.clone(),
+            source,
+        })?;
+    }
+    fs::write(&loaded.path, serialized).map_err(|source| AppError::WriteConfig {
+        path: loaded.path.clone(),
+        source,
+    })?;
+
+    Ok(LoadedConfiguration {
+        exists: true,
+        ..loaded
+    })
 }
 
 pub fn load_configuration(path: Option<&Path>) -> Result<LoadedConfiguration, AppError> {

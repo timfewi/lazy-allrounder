@@ -13,6 +13,16 @@ It ships two front-ends over the same core:
 
 ## Installation
 
+### Installers (easiest — no developer tools needed)
+
+Tagged releases ship native installers built with cargo-packager on the [releases page](https://github.com/timfewi/lazy-allrounder/releases):
+
+- **Windows**: `.exe` setup (NSIS)
+- **macOS**: `.dmg` (drag to Applications)
+- **Linux**: `.deb` (double-click in your software center) or AppImage (make executable and run)
+
+On first launch the app asks for your OpenRouter API key right in its panel and stores it in the system keyring — no terminal, no config editing, and a "Start on login" toggle lives in the same panel. Unsigned builds: macOS Gatekeeper needs right-click → Open the first time; Windows SmartScreen needs "More info → Run anyway".
+
 ### Cargo (Windows, macOS, Linux)
 
 ```bash

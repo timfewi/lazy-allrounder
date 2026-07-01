@@ -9,7 +9,9 @@ use std::time::Duration;
 
 use eframe::NativeOptions;
 use egui::{Context, Id, ViewportCommand};
+use lazy_allrounder_app::{AppError, Application};
 use lazy_allrounder_core::config::OverlayCorner;
+use lazy_allrounder_platform::AudioPlayer;
 
 use crate::hotkeys::HotkeyEvents;
 use crate::session::Session;
@@ -17,45 +19,119 @@ use crate::state::{Activity, Mode, OverlayState};
 
 const EXPAND_SECONDS: f32 = 0.22;
 
+/// Whether the backing Application is usable, and if not, what the panel
+/// should ask of the user.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartupState {
+    Ready,
+    NeedsApiKey,
+    Failed(String),
+}
+
 pub struct OverlayApp {
     state: OverlayState,
     session: Option<Session>,
     hotkeys: Option<HotkeyEvents>,
-    startup_error: Option<String>,
+    startup: StartupState,
     corner: OverlayCorner,
     question: String,
+    api_key_input: String,
+    onboarding_error: Option<String>,
+    autostart_enabled: bool,
     openness: f32,
+    player: AudioPlayer,
 }
 
 impl OverlayApp {
-    pub fn new(
-        session: Option<Session>,
-        hotkeys: Option<HotkeyEvents>,
-        startup_error: Option<String>,
-        corner: OverlayCorner,
-    ) -> Self {
+    pub fn new(hotkeys: Option<HotkeyEvents>, corner: OverlayCorner, player: AudioPlayer) -> Self {
+        let autostart_enabled =
+            lazy_allrounder_platform::is_autostart_enabled().unwrap_or_else(|error| {
+                tracing::warn!("could not check the start-on-login state: {error}");
+                false
+            });
+
         Self {
             state: OverlayState::new(),
-            session,
+            session: None,
             hotkeys,
-            startup_error,
+            startup: StartupState::NeedsApiKey,
             corner,
             question: String::new(),
+            api_key_input: String::new(),
+            onboarding_error: None,
+            autostart_enabled,
             openness: 0.0,
+            player,
+        }
+    }
+
+    /// (Re)creates the Application + session; called at startup and again
+    /// after the user saves an API key through the panel.
+    fn try_start_session(&mut self, ctx: &Context) {
+        let outcome = lazy_allrounder_app::ensure_configuration_file(None)
+            .and_then(|loaded| Application::from_loaded_configuration(&loaded));
+
+        match outcome {
+            Ok(application) => {
+                let repaint_ctx = ctx.clone();
+                self.session = Some(Session::spawn(
+                    application,
+                    self.player.clone(),
+                    move || repaint_ctx.request_repaint(),
+                ));
+                self.startup = StartupState::Ready;
+                self.onboarding_error = None;
+            }
+            Err(AppError::MissingApiKey) => {
+                self.startup = StartupState::NeedsApiKey;
+            }
+            Err(error) => {
+                self.startup = StartupState::Failed(error.to_string());
+            }
+        }
+    }
+
+    fn save_api_key(&mut self, ctx: &Context) {
+        let api_key = self.api_key_input.trim().to_owned();
+        if api_key.is_empty() {
+            return;
+        }
+
+        match lazy_allrounder_app::store_api_key(&api_key) {
+            Ok(()) => {
+                self.api_key_input.clear();
+                self.try_start_session(ctx);
+                if self.startup == StartupState::Ready {
+                    self.state.panel_open = true;
+                }
+            }
+            Err(error) => {
+                self.onboarding_error = Some(error.to_string());
+            }
+        }
+    }
+
+    fn set_autostart(&mut self, enabled: bool) {
+        match lazy_allrounder_platform::set_autostart(enabled) {
+            Ok(()) => self.autostart_enabled = enabled,
+            Err(error) => {
+                tracing::warn!("could not update start-on-login: {error}");
+                self.onboarding_error = Some(error.to_string());
+            }
         }
     }
 
     fn trigger(&mut self, mode: Mode, now: f64) {
         let Some(session) = &self.session else {
+            let message = match &self.startup {
+                StartupState::NeedsApiKey => {
+                    "add your OpenRouter API key in the panel first".to_owned()
+                }
+                StartupState::Failed(message) => message.clone(),
+                StartupState::Ready => "the app is still starting".to_owned(),
+            };
             self.state.begin(mode);
-            self.state.finish(
-                mode,
-                Err(self
-                    .startup_error
-                    .clone()
-                    .unwrap_or_else(|| "the app is not configured yet".to_owned())),
-                now,
-            );
+            self.state.finish(mode, Err(message), now);
             return;
         };
 
@@ -132,15 +208,26 @@ impl eframe::App for OverlayApp {
                 ui.set_min_size(ui.available_size());
                 panel_response = panel::draw(
                     ui,
-                    &self.state,
-                    &mut self.question,
-                    self.startup_error.as_deref(),
+                    panel::PanelInputs {
+                        state: &self.state,
+                        startup: &self.startup,
+                        question: &mut self.question,
+                        api_key_input: &mut self.api_key_input,
+                        onboarding_error: self.onboarding_error.as_deref(),
+                        autostart_enabled: self.autostart_enabled,
+                    },
                 );
             });
         }
 
         if let Some(mode) = panel_response.trigger {
             self.trigger(mode, now);
+        }
+        if panel_response.save_key {
+            self.save_api_key(&ctx);
+        }
+        if let Some(enabled) = panel_response.set_autostart {
+            self.set_autostart(enabled);
         }
         if panel_response.stop
             && let Some(session) = &self.session
@@ -157,11 +244,9 @@ impl eframe::App for OverlayApp {
 }
 
 pub fn run(
-    application: Option<lazy_allrounder_app::Application>,
-    startup_error: Option<String>,
     corner: OverlayCorner,
     hotkeys_config: lazy_allrounder_core::config::HotkeysConfiguration,
-    player: lazy_allrounder_platform::AudioPlayer,
+    player: AudioPlayer,
 ) -> eframe::Result<()> {
     let options = NativeOptions {
         viewport: viewport::initial_viewport(),
@@ -174,20 +259,13 @@ pub fn run(
         Box::new(move |creation_context| {
             creation_context.egui_ctx.set_visuals(egui::Visuals::dark());
 
+            let hotkeys = crate::hotkeys::start(&hotkeys_config, creation_context.egui_ctx.clone());
+            let mut app = OverlayApp::new(hotkeys, corner, player);
             // The session's completion notifications must wake the event loop
             // even when the window is idle, so it needs the live egui context.
-            let session = application.map(|application| {
-                let repaint_ctx = creation_context.egui_ctx.clone();
-                Session::spawn(application, player, move || repaint_ctx.request_repaint())
-            });
-            let hotkeys = crate::hotkeys::start(&hotkeys_config, creation_context.egui_ctx.clone());
+            app.try_start_session(&creation_context.egui_ctx);
 
-            Ok(Box::new(OverlayApp::new(
-                session,
-                hotkeys,
-                startup_error,
-                corner,
-            )))
+            Ok(Box::new(app))
         }),
     )
 }

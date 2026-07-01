@@ -48,6 +48,21 @@ impl OpenRouterClient {
         Ok(client)
     }
 
+    /// Builds a client with an explicit key (e.g. loaded from the OS
+    /// keyring); the caller owns the resolution order.
+    pub fn with_api_key(api_key: String) -> Result<Self, PortError> {
+        if api_key.trim().is_empty() {
+            return Err(PortError::Other {
+                message: "the OpenRouter API key is empty.".to_owned(),
+            });
+        }
+
+        Ok(Self {
+            api_key,
+            ..Self::default()
+        })
+    }
+
     fn post(&self, path: &str) -> reqwest::RequestBuilder {
         let url = format!("https://openrouter.ai/api/v1{path}");
         let builder = self

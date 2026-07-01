@@ -20,3 +20,4 @@ config.toml
 config.local.toml
 secrets.toml
 secrets.local.toml
+dist/
