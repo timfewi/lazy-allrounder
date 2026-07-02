@@ -20,6 +20,7 @@ beforePackagingCommand = "cargo build --release -p lazy-allrounder-gui"
 [dependencies]
 eframe.workspace = true
 egui.workspace = true
+image.workspace = true
 lazy-allrounder-app = { path = "../app" }
 lazy-allrounder-core = { path = "../core" }
 lazy-allrounder-platform = { path = "../platform" }

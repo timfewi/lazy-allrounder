@@ -8,7 +8,7 @@ pub mod viewport;
 use std::time::Duration;
 
 use eframe::NativeOptions;
-use egui::{Context, Id, ViewportCommand};
+use egui::{Context, Id, ViewportCommand, WindowLevel};
 use lazy_allrounder_app::{AppError, Application};
 use lazy_allrounder_core::config::OverlayCorner;
 use lazy_allrounder_platform::AudioPlayer;
@@ -33,12 +33,13 @@ pub struct OverlayApp {
     session: Option<Session>,
     hotkeys: Option<HotkeyEvents>,
     startup: StartupState,
-    corner: OverlayCorner,
+    geometry: viewport::Geometry,
     question: String,
     api_key_input: String,
     onboarding_error: Option<String>,
     autostart_enabled: bool,
     openness: f32,
+    was_focused: Option<bool>,
     player: AudioPlayer,
 }
 
@@ -55,12 +56,13 @@ impl OverlayApp {
             session: None,
             hotkeys,
             startup: StartupState::NeedsApiKey,
-            corner,
+            geometry: viewport::Geometry::new(corner),
             question: String::new(),
             api_key_input: String::new(),
             onboarding_error: None,
             autostart_enabled,
             openness: 0.0,
+            was_focused: None,
             player,
         }
     }
@@ -180,10 +182,21 @@ impl eframe::App for OverlayApp {
             self.state.panel_open,
             EXPAND_SECONDS,
         );
-        viewport::apply_geometry(ctx, self.corner, self.openness);
+        self.geometry.apply(ctx, self.openness);
+
+        // "Always on top, no matter what": winit sets the level once at
+        // creation, but another app raising itself can still bury us. When we
+        // notice we've lost focus (a focus-lost event wakes the loop, so this
+        // costs nothing while idle), re-assert the always-on-top level to pop
+        // back above whatever came forward — without stealing focus.
+        let focused = ctx.input(|input| input.viewport().focused);
+        if focused == Some(false) && self.was_focused != Some(false) {
+            ctx.send_viewport_cmd(ViewportCommand::WindowLevel(WindowLevel::AlwaysOnTop));
+        }
+        self.was_focused = focused;
 
         // Click-away: closing when the window loses focus while expanded.
-        if self.state.panel_open && ctx.input(|input| input.viewport().focused) == Some(false) {
+        if self.state.panel_open && focused == Some(false) {
             self.state.close_panel();
         }
 
@@ -200,7 +213,13 @@ impl eframe::App for OverlayApp {
 
         let mut panel_response = panel::PanelResponse::default();
         if self.openness < 0.05 {
-            if badge::draw(ui, &self.state, now).clicked() {
+            let badge = badge::draw(ui, &self.state, now);
+            // A press-and-move drags the whole window (OS-driven move, so it
+            // works even where we can't set positions ourselves); a clean tap
+            // toggles the panel. StartDrag is issued once, at drag start.
+            if badge.drag_started() {
+                ctx.send_viewport_cmd(ViewportCommand::StartDrag);
+            } else if badge.clicked() {
                 self.state.toggle_panel();
             }
         } else {

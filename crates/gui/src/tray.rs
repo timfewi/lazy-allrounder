@@ -66,7 +66,7 @@ mod linux {
         let _tray = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
             .with_tooltip("Lazy Allrounder")
-            .with_icon(placeholder_icon())
+            .with_icon(tray_icon())
             .build()
             .expect("failed to create the tray icon");
 
@@ -117,8 +117,16 @@ mod linux {
         gtk::main();
     }
 
-    // Solid accent-blue placeholder; replaced by a real logo badge icon later.
-    fn placeholder_icon() -> Icon {
+    // The waveform logo, shared with the overlay window icon. If the embedded
+    // asset ever fails to decode we fall back to a solid accent-blue square so
+    // the tray still has a visible icon.
+    fn tray_icon() -> Icon {
+        if let Some(icon) = crate::icon::decode()
+            && let Ok(icon) = Icon::from_rgba(icon.rgba, icon.width, icon.height)
+        {
+            return icon;
+        }
+
         const SIZE: u32 = 32;
         let mut rgba = Vec::with_capacity((SIZE * SIZE * 4) as usize);
         for _ in 0..(SIZE * SIZE) {

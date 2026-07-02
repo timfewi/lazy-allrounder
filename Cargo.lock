@@ -2285,6 +2285,7 @@ dependencies = [
  "eframe",
  "egui",
  "gtk",
+ "image",
  "lazy-allrounder-app",
  "lazy-allrounder-core",
  "lazy-allrounder-platform",
