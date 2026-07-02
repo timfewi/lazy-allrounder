@@ -40,6 +40,7 @@ pub struct OverlayApp {
     autostart_enabled: bool,
     openness: f32,
     was_focused: Option<bool>,
+    was_occluded: Option<bool>,
     player: AudioPlayer,
 }
 
@@ -63,6 +64,7 @@ impl OverlayApp {
             autostart_enabled,
             openness: 0.0,
             was_focused: None,
+            was_occluded: None,
             player,
         }
     }
@@ -184,16 +186,24 @@ impl eframe::App for OverlayApp {
         );
         self.geometry.apply(ctx, self.openness);
 
-        // "Always on top, no matter what": winit sets the level once at
-        // creation, but another app raising itself can still bury us. When we
-        // notice we've lost focus (a focus-lost event wakes the loop, so this
-        // costs nothing while idle), re-assert the always-on-top level to pop
-        // back above whatever came forward — without stealing focus.
-        let focused = ctx.input(|input| input.viewport().focused);
-        if focused == Some(false) && self.was_focused != Some(false) {
+        // Keep the badge on top (best effort): winit sets the level once at
+        // creation, but another always-on-top window raising itself can still
+        // bury us. Re-assert the level on two transitions, each of which wakes
+        // the loop via its own event so this costs nothing while idle and
+        // never steals focus: losing input focus, and becoming occluded (the
+        // case where a peer covers an already-unfocused badge — focus alone
+        // misses it). Occlusion reporting is platform-limited (best on
+        // macOS/Wayland; X11 rarely reports it), so the creation-time
+        // always_on_top flag remains the baseline.
+        let (focused, occluded) =
+            ctx.input(|input| (input.viewport().focused, input.viewport().occluded));
+        let lost_focus = focused == Some(false) && self.was_focused != Some(false);
+        let newly_occluded = occluded == Some(true) && self.was_occluded != Some(true);
+        if lost_focus || newly_occluded {
             ctx.send_viewport_cmd(ViewportCommand::WindowLevel(WindowLevel::AlwaysOnTop));
         }
         self.was_focused = focused;
+        self.was_occluded = occluded;
 
         // Click-away: closing when the window loses focus while expanded.
         if self.state.panel_open && focused == Some(false) {
@@ -214,10 +224,12 @@ impl eframe::App for OverlayApp {
         let mut panel_response = panel::PanelResponse::default();
         if self.openness < 0.05 {
             let badge = badge::draw(ui, &self.state, now);
-            // A press-and-move drags the whole window (OS-driven move, so it
-            // works even where we can't set positions ourselves); a clean tap
-            // toggles the panel. StartDrag is issued once, at drag start.
-            if badge.drag_started() {
+            // A primary-button press-and-move drags the whole window (OS-driven
+            // move, so it works even where we can't set positions ourselves); a
+            // clean tap toggles the panel. StartDrag is issued once, at drag
+            // start, and only for the primary button so a middle/right drag
+            // can't hijack the window into a move.
+            if badge.drag_started_by(egui::PointerButton::Primary) {
                 ctx.send_viewport_cmd(ViewportCommand::StartDrag);
             } else if badge.clicked() {
                 self.state.toggle_panel();

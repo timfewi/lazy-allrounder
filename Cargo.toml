@@ -31,8 +31,9 @@ auto-launch = "0.5"
 eframe = { version = "0.34", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
 egui = "0.34"
 global-hotkey = "0.8"
-# Only used to decode the embedded PNG app icon (window + tray); PNG-only keeps
-# the dependency tree small.
+# Decodes the embedded PNG app icon (window + tray). image is already in the
+# tree transitively (via arboard/eframe); pinning it PNG-only here avoids
+# pulling the extra JPEG/GIF/WebP decoders that default features would add.
 image = { version = "0.25", default-features = false, features = ["png"] }
 # Platform features are cfg-gated inside the crate, so enabling all three is
 # safe cross-platform.

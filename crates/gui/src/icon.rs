@@ -1,5 +1,7 @@
 //! The embedded app icon (the waveform mark from `assets/icon.png`), decoded
-//! once and reused for the window icon and the tray icon.
+//! on demand into whichever icon a run needs — the eframe window icon in
+//! overlay mode, or the tray icon in tray mode (the two are mutually
+//! exclusive, so a launch decodes it once).
 
 /// Raw RGBA pixels plus dimensions, ready for whatever icon type a backend
 /// wants to build from them.

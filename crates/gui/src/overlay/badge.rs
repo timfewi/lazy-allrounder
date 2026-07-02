@@ -9,8 +9,8 @@ use crate::overlay::theme;
 use crate::state::{Activity, OverlayState};
 
 /// Relative bar heights of the waveform mark, center bar tallest. Keep in
-/// sync with `heights` in the icon generator (scratchpad `gen_icon.py`) so
-/// the badge and the window/tray icon read as the same logo.
+/// sync with `heights` in the icon generator (`tools/gen_icon.py`) so the
+/// badge and the window/tray icon read as the same logo.
 const BAR_HEIGHTS: [f32; 5] = [0.42, 0.72, 1.0, 0.72, 0.42];
 
 pub fn draw(ui: &mut Ui, state: &OverlayState, time: f64) -> Response {
