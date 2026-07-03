@@ -9,9 +9,15 @@ pub const BADGE_SIZE: Vec2 = vec2(56.0, 56.0);
 pub const PANEL_SIZE: Vec2 = vec2(280.0, 380.0);
 const SCREEN_MARGIN: f32 = 18.0;
 
+/// The Wayland `app_id` / X11 `WM_CLASS` the desktop uses to associate the
+/// window with its `.desktop` entry (single-sourced from the platform crate,
+/// which also installs the matching entry).
+pub const APP_ID: &str = lazy_allrounder_platform::APP_ID;
+
 pub fn initial_viewport() -> ViewportBuilder {
     let mut builder = ViewportBuilder::default()
         .with_title("Lazy Allrounder")
+        .with_app_id(APP_ID)
         .with_inner_size(BADGE_SIZE)
         .with_decorations(false)
         .with_transparent(true)

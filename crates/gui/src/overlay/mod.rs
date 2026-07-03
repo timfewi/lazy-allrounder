@@ -10,7 +10,9 @@ use std::time::Duration;
 use eframe::NativeOptions;
 use egui::{Context, Id, ViewportCommand, WindowLevel};
 use lazy_allrounder_app::{AppError, Application};
-use lazy_allrounder_core::config::OverlayCorner;
+use lazy_allrounder_core::config::{
+    AppConfiguration, OverlayCorner, clamp_tts_speed, round_tts_speed,
+};
 use lazy_allrounder_platform::AudioPlayer;
 
 use crate::hotkeys::HotkeyEvents;
@@ -38,6 +40,11 @@ pub struct OverlayApp {
     api_key_input: String,
     onboarding_error: Option<String>,
     autostart_enabled: bool,
+    speech_speed: f32,
+    /// The last speed actually persisted + applied. The panel reports the
+    /// slider value every idle frame; only a genuine difference from this
+    /// commits, which makes egui's per-draw value rewrites harmless.
+    committed_speed: f32,
     openness: f32,
     was_focused: Option<bool>,
     was_occluded: Option<bool>,
@@ -45,12 +52,22 @@ pub struct OverlayApp {
 }
 
 impl OverlayApp {
-    pub fn new(hotkeys: Option<HotkeyEvents>, corner: OverlayCorner, player: AudioPlayer) -> Self {
+    pub fn new(
+        hotkeys: Option<HotkeyEvents>,
+        corner: OverlayCorner,
+        player: AudioPlayer,
+        speech_speed: Option<f32>,
+    ) -> Self {
         let autostart_enabled =
             lazy_allrounder_platform::is_autostart_enabled().unwrap_or_else(|error| {
                 tracing::warn!("could not check the start-on-login state: {error}");
                 false
             });
+
+        // Rounded to the slider's own display precision so the first panel
+        // draw (egui re-writes slider values through clamp + max_decimals
+        // every frame) is a no-op instead of a phantom "change".
+        let speech_speed = round_tts_speed(clamp_tts_speed(speech_speed).unwrap_or(1.0));
 
         Self {
             state: OverlayState::new(),
@@ -62,6 +79,8 @@ impl OverlayApp {
             api_key_input: String::new(),
             onboarding_error: None,
             autostart_enabled,
+            speech_speed,
+            committed_speed: speech_speed,
             openness: 0.0,
             was_focused: None,
             was_occluded: None,
@@ -69,20 +88,29 @@ impl OverlayApp {
         }
     }
 
+    fn spawn_session(&mut self, application: Application, ctx: &Context) {
+        let repaint_ctx = ctx.clone();
+        self.session = Some(Session::spawn(
+            application,
+            self.player.clone(),
+            move || repaint_ctx.request_repaint(),
+        ));
+    }
+
+    /// The one recipe for constructing an `Application` from the on-disk
+    /// configuration — startup, key onboarding, and speed changes must not
+    /// drift apart in how they build it.
+    fn build_application() -> Result<Application, AppError> {
+        lazy_allrounder_app::ensure_configuration_file(None)
+            .and_then(|loaded| Application::from_loaded_configuration(&loaded))
+    }
+
     /// (Re)creates the Application + session; called at startup and again
     /// after the user saves an API key through the panel.
     fn try_start_session(&mut self, ctx: &Context) {
-        let outcome = lazy_allrounder_app::ensure_configuration_file(None)
-            .and_then(|loaded| Application::from_loaded_configuration(&loaded));
-
-        match outcome {
+        match Self::build_application() {
             Ok(application) => {
-                let repaint_ctx = ctx.clone();
-                self.session = Some(Session::spawn(
-                    application,
-                    self.player.clone(),
-                    move || repaint_ctx.request_repaint(),
-                ));
+                self.spawn_session(application, ctx);
                 self.startup = StartupState::Ready;
                 self.onboarding_error = None;
             }
@@ -112,6 +140,32 @@ impl OverlayApp {
             Err(error) => {
                 self.onboarding_error = Some(error.to_string());
             }
+        }
+    }
+
+    /// Persists a new speaking speed and swaps in a session at the new pace
+    /// (the TTS client bakes the speed in at construction). Callers gate on
+    /// `!is_busy()`, so no in-flight work is dropped by the swap. A failed
+    /// save keeps the running session and snaps the slider back to the
+    /// committed value, so the display never lies about the pace in use.
+    fn set_speech_speed(&mut self, speed: f32, ctx: &Context) {
+        if let Err(error) = lazy_allrounder_app::store_tts_speed(speed) {
+            tracing::warn!("could not save the voice speed: {error}");
+            self.speech_speed = self.committed_speed;
+            return;
+        }
+        self.speech_speed = speed;
+        self.committed_speed = speed;
+
+        // Swap only when the replacement can actually be built; a transient
+        // failure (keyring hiccup, config race) keeps the old session alive
+        // instead of tearing the panel down to onboarding.
+        match Self::build_application() {
+            Ok(application) => self.spawn_session(application, ctx),
+            Err(error) => tracing::warn!(
+                "voice speed saved, but the session could not be rebuilt \
+                 (the old pace stays active until the next action succeeds): {error}"
+            ),
         }
     }
 
@@ -246,6 +300,7 @@ impl eframe::App for OverlayApp {
                         api_key_input: &mut self.api_key_input,
                         onboarding_error: self.onboarding_error.as_deref(),
                         autostart_enabled: self.autostart_enabled,
+                        speech_speed: &mut self.speech_speed,
                     },
                 );
             });
@@ -253,6 +308,16 @@ impl eframe::App for OverlayApp {
 
         if let Some(mode) = panel_response.trigger {
             self.trigger(mode, now);
+        }
+        // The panel reports the slider value on every settled frame; egui
+        // itself rewrites slider values during draw (clamping, decimal
+        // rounding — even while disabled), so only a real difference from
+        // the committed value counts, and never while an action is running.
+        if let Some(speed) = panel_response.set_speed {
+            let speed = round_tts_speed(speed);
+            if speed != self.committed_speed && !self.state.is_busy() {
+                self.set_speech_speed(speed, &ctx);
+            }
         }
         if panel_response.save_key {
             self.save_api_key(&ctx);
@@ -274,24 +339,74 @@ impl eframe::App for OverlayApp {
     }
 }
 
-pub fn run(
-    corner: OverlayCorner,
-    hotkeys_config: lazy_allrounder_core::config::HotkeysConfiguration,
-    player: AudioPlayer,
+pub fn run(config: AppConfiguration, player: AudioPlayer) -> eframe::Result<()> {
+    // winit permits exactly one event loop per process (the created-flag is
+    // set even when creation fails), so the backend must be chosen correctly
+    // up front — a failed X11 attempt cannot be retried on Wayland. Hence
+    // the preflight: only force X11 when the display socket actually accepts
+    // a connection.
+    #[cfg(target_os = "linux")]
+    let force_x11 = should_force_x11(
+        lazy_allrounder_platform::session_kind(),
+        x11_display_reachable(),
+        std::env::var("LAZY_ALLROUNDER_BACKEND").ok().as_deref(),
+    );
+    #[cfg(not(target_os = "linux"))]
+    let force_x11 = false;
+
+    if force_x11 {
+        tracing::info!(
+            "Wayland session: running the overlay through XWayland so it can \
+             stay on top, sit in its corner, and be dragged \
+             (set LAZY_ALLROUNDER_BACKEND=wayland to opt out)"
+        );
+    }
+
+    run_native(&config, &player, force_x11).inspect_err(|_| {
+        if force_x11 {
+            tracing::error!(
+                "the overlay failed on the X11 (XWayland) backend; \
+                 set LAZY_ALLROUNDER_BACKEND=wayland to use the native backend"
+            );
+        }
+    })
+}
+
+/// One eframe lifecycle with the chosen backend.
+fn run_native(
+    config: &AppConfiguration,
+    player: &AudioPlayer,
+    force_x11: bool,
 ) -> eframe::Result<()> {
-    let options = NativeOptions {
+    #[cfg_attr(not(target_os = "linux"), expect(unused_mut))]
+    let mut options = NativeOptions {
         viewport: viewport::initial_viewport(),
         ..Default::default()
     };
 
+    #[cfg(target_os = "linux")]
+    if force_x11 {
+        use winit::platform::x11::EventLoopBuilderExtX11 as _;
+        options.event_loop_builder = Some(Box::new(|builder| {
+            builder.with_x11();
+        }));
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = force_x11;
+
+    let corner = config.overlay.corner;
+    let hotkeys_config = config.hotkeys.clone();
+    let speech_speed = config.tts.speed;
+    let player = player.clone();
+
     eframe::run_native(
-        "lazy-allrounder",
+        viewport::APP_ID,
         options,
         Box::new(move |creation_context| {
             creation_context.egui_ctx.set_visuals(egui::Visuals::dark());
 
             let hotkeys = crate::hotkeys::start(&hotkeys_config, creation_context.egui_ctx.clone());
-            let mut app = OverlayApp::new(hotkeys, corner, player);
+            let mut app = OverlayApp::new(hotkeys, corner, player, speech_speed);
             // The session's completion notifications must wake the event loop
             // even when the window is idle, so it needs the live egui context.
             app.try_start_session(&creation_context.egui_ctx);
@@ -299,4 +414,115 @@ pub fn run(
             Ok(Box::new(app))
         }),
     )
+}
+
+/// Whether an X server (usually XWayland) is actually accepting connections,
+/// not merely advertised by `DISPLAY`. Local displays (`:N` / `:N.S`) are
+/// probed by connecting to their Unix socket. Host-qualified or malformed
+/// values are never XWayland (which is always local), so they do NOT force
+/// the X11 backend — a stale `DISPLAY=localhost:10.0` from an old SSH
+/// forward must not brick a Wayland session, given a failed X11 event loop
+/// cannot be retried. `LAZY_ALLROUNDER_BACKEND=x11` still overrides for
+/// genuine remote-X setups.
+#[cfg(target_os = "linux")]
+fn x11_display_reachable() -> bool {
+    let Some(display) = std::env::var_os("DISPLAY").filter(|display| !display.is_empty()) else {
+        return false;
+    };
+
+    match x11_socket_path(&display.to_string_lossy()) {
+        Some(socket) => std::os::unix::net::UnixStream::connect(socket).is_ok(),
+        None => false,
+    }
+}
+
+/// The Unix socket path for a local `DISPLAY` value, or None when the
+/// display names a remote host (TCP) and cannot be probed this way.
+#[cfg(target_os = "linux")]
+fn x11_socket_path(display: &str) -> Option<String> {
+    let number = display.strip_prefix(':')?;
+    let number = number.split('.').next().unwrap_or(number);
+    if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+
+    Some(format!("/tmp/.X11-unix/X{number}"))
+}
+
+/// Whether to force winit's X11 backend. Native Wayland windows cannot stay
+/// always-on-top, position themselves, or (on some compositors) even be
+/// dragged — the compositor owns all of that — so on Wayland sessions the
+/// overlay prefers XWayland, where GNOME and friends honor all three. The
+/// `LAZY_ALLROUNDER_BACKEND` variable (`x11`/`wayland`) overrides in either
+/// direction.
+#[cfg(target_os = "linux")]
+fn should_force_x11(
+    session: Option<lazy_allrounder_platform::SessionKind>,
+    x11_display: bool,
+    override_value: Option<&str>,
+) -> bool {
+    match override_value.map(str::trim) {
+        Some(value) if value.eq_ignore_ascii_case("wayland") => false,
+        Some(value) if value.eq_ignore_ascii_case("x11") => true,
+        _ => {
+            matches!(
+                session,
+                Some(lazy_allrounder_platform::SessionKind::Wayland)
+            ) && x11_display
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod backend_tests {
+    use lazy_allrounder_platform::SessionKind;
+
+    use super::{should_force_x11, x11_socket_path};
+
+    #[test]
+    fn local_displays_map_to_their_unix_socket() {
+        assert_eq!(x11_socket_path(":0"), Some("/tmp/.X11-unix/X0".to_owned()));
+        assert_eq!(
+            x11_socket_path(":10.2"),
+            Some("/tmp/.X11-unix/X10".to_owned())
+        );
+    }
+
+    #[test]
+    fn remote_or_malformed_displays_are_not_probed() {
+        assert_eq!(x11_socket_path("localhost:10.0"), None);
+        assert_eq!(x11_socket_path(":"), None);
+        assert_eq!(x11_socket_path(":abc"), None);
+    }
+
+    #[test]
+    fn wayland_with_xwayland_prefers_x11() {
+        assert!(should_force_x11(Some(SessionKind::Wayland), true, None));
+    }
+
+    #[test]
+    fn wayland_without_xwayland_stays_native() {
+        assert!(!should_force_x11(Some(SessionKind::Wayland), false, None));
+    }
+
+    #[test]
+    fn x11_sessions_never_need_forcing() {
+        assert!(!should_force_x11(Some(SessionKind::X11), true, None));
+    }
+
+    #[test]
+    fn override_wins_in_both_directions() {
+        assert!(!should_force_x11(
+            Some(SessionKind::Wayland),
+            true,
+            Some("wayland")
+        ));
+        assert!(should_force_x11(Some(SessionKind::X11), true, Some("X11")));
+        // Unknown values fall back to the default heuristic.
+        assert!(should_force_x11(
+            Some(SessionKind::Wayland),
+            true,
+            Some("cosmic")
+        ));
+    }
 }

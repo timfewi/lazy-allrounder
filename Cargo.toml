@@ -57,3 +57,6 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 # on Linux; revisit lighter Linux tray backends (e.g. the `ksni` crate
 # directly) as a follow-up if the GTK dependency proves too heavy in practice.
 tray-icon = "0.24.1"
+# Only for the Linux backend-selection hook (EventLoopBuilderExtX11); the
+# version must track the winit that eframe resolves to.
+winit = { version = "0.30.13", default-features = false, features = ["x11"] }

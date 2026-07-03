@@ -2293,6 +2293,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tray-icon",
+ "winit",
 ]
 
 [[package]]

@@ -16,6 +16,13 @@ const ICON_PNG: &[u8] = include_bytes!(concat!(
     "/../../assets/icon.png"
 ));
 
+/// The raw embedded PNG bytes, for consumers that want the file itself
+/// (e.g. installing the hicolor desktop icon) rather than decoded pixels.
+#[cfg(target_os = "linux")]
+pub fn png_bytes() -> &'static [u8] {
+    ICON_PNG
+}
+
 /// Decodes the embedded PNG; a corrupt asset degrades to `None` (default
 /// icon) instead of failing startup.
 pub fn decode() -> Option<DecodedIcon> {

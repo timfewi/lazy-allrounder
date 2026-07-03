@@ -17,3 +17,42 @@ pub fn read_text() -> Result<String, PortError> {
         message: format!("failed to read text from the clipboard: {error}"),
     })
 }
+
+/// Reads the text the user currently has highlighted, falling back to the
+/// clipboard — so on Linux, selecting text is enough and Ctrl+C is optional.
+///
+/// The PRIMARY selection only exists on Linux, and this build reads it via
+/// arboard's X11 backend — on Wayland sessions that means through XWayland,
+/// where the compositor bridges selections both ways; without any X server
+/// the read fails and the clipboard fallback applies. Elsewhere this is
+/// exactly `read_text`. A missing or blank selection is not an error — it
+/// just means "use the clipboard".
+pub fn read_selection_or_clipboard() -> Result<String, PortError> {
+    #[cfg(target_os = "linux")]
+    match read_primary_selection() {
+        Ok(text) if !text.trim().is_empty() => return Ok(text),
+        Ok(_) => {}
+        Err(error) => {
+            tracing::debug!("no readable primary selection, using the clipboard: {error}");
+        }
+    }
+
+    read_text()
+}
+
+#[cfg(target_os = "linux")]
+fn read_primary_selection() -> Result<String, PortError> {
+    use arboard::{GetExtLinux, LinuxClipboardKind};
+
+    let mut clipboard = Clipboard::new().map_err(|error| PortError::Other {
+        message: format!("failed to access the system clipboard: {error}"),
+    })?;
+
+    clipboard
+        .get()
+        .clipboard(LinuxClipboardKind::Primary)
+        .text()
+        .map_err(|error| PortError::Other {
+            message: format!("failed to read the primary selection: {error}"),
+        })
+}

@@ -13,6 +13,10 @@ pub struct PanelResponse {
     pub trigger: Option<Mode>,
     pub save_key: bool,
     pub set_autostart: Option<bool>,
+    /// The slider's current speed, reported whenever no interaction is in
+    /// flight (drag released, no keyboard focus). The app dedups against the
+    /// last committed value, so repeated reports are no-ops.
+    pub set_speed: Option<f32>,
     pub stop: bool,
     pub close: bool,
     pub quit: bool,
@@ -25,6 +29,7 @@ pub struct PanelInputs<'a> {
     pub api_key_input: &'a mut String,
     pub onboarding_error: Option<&'a str>,
     pub autostart_enabled: bool,
+    pub speech_speed: &'a mut f32,
 }
 
 pub fn draw(ui: &mut Ui, inputs: PanelInputs<'_>) -> PanelResponse {
@@ -62,7 +67,13 @@ pub fn draw(ui: &mut Ui, inputs: PanelInputs<'_>) -> PanelResponse {
             ui.add_space(8.0);
         }
         StartupState::Ready => {
-            draw_modes(ui, inputs.state, inputs.question, &mut response);
+            draw_modes(
+                ui,
+                inputs.state,
+                inputs.question,
+                inputs.speech_speed,
+                &mut response,
+            );
         }
     }
 
@@ -153,6 +164,7 @@ fn draw_modes(
     ui: &mut Ui,
     state: &OverlayState,
     question: &mut String,
+    speech_speed: &mut f32,
     response: &mut PanelResponse,
 ) {
     let busy = state.is_busy();
@@ -182,6 +194,31 @@ fn draw_modes(
     if mode_button(ui, Mode::Dictate.label(), busy) {
         response.trigger = Some(Mode::Dictate);
     }
+
+    // Range mirrors core's TTS_SPEED_RANGE so a hand-edited config value is
+    // representable rather than silently clamped into a narrower band. The
+    // value is reported once interaction settles (drag released, keyboard
+    // focus gone) — never on `changed()`, which egui also fires for its own
+    // per-draw rounding and for every keystroke of an edit. The busy gate
+    // means a commit can never yank the session out from under an action.
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new("Voice speed")
+                .color(theme::TEXT_MUTED)
+                .size(12.0),
+        );
+        let slider = ui.add_enabled(
+            !busy,
+            egui::Slider::new(speech_speed, lazy_allrounder_core::config::TTS_SPEED_RANGE)
+                .max_decimals(2)
+                .suffix("×"),
+        );
+        let settled = !slider.dragged() && !slider.has_focus();
+        if !busy && (slider.drag_stopped() || settled) {
+            response.set_speed = Some(*speech_speed);
+        }
+    });
 
     ui.add_space(8.0);
     match &state.activity {

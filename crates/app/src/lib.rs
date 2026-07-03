@@ -98,12 +98,17 @@ impl Application {
         let shared_client = OpenRouterClient::with_api_key(api_key)
             .map_err(|error| AppError::Provider(error.to_string()))?;
         let tts_voice = config.tts.voice.clone();
+        let tts_speed = config.tts.speed;
 
         Ok(Self {
             config,
             stt_client: OpenRouterSpeechToTextClient::new(shared_client.clone()),
             text_client: OpenRouterTextClient::new(shared_client.clone()),
-            tts_client: OpenRouterTextToSpeechClient::with_voice(shared_client, tts_voice),
+            tts_client: OpenRouterTextToSpeechClient::with_voice(
+                shared_client,
+                tts_voice,
+                tts_speed,
+            ),
         })
     }
 
@@ -254,6 +259,60 @@ pub fn store_api_key(api_key: &str) -> Result<(), AppError> {
         .map_err(|error| AppError::Provider(error.to_string()))
 }
 
+/// Persists the speaking-speed preference into the config file (created from
+/// defaults first if missing), so the next `Application` picks it up.
+///
+/// Edits only `[tts].speed` in the parsed document: entries the user never
+/// wrote stay absent (so future default changes still reach them) and their
+/// own entries keep their values. Comments do not survive the rewrite — the
+/// same trade-off `ensure_configuration_file` makes when generating the file.
+/// The write goes through a sibling temp file + rename, so a crash mid-write
+/// can never truncate the config.
+pub fn store_tts_speed(speed: f32) -> Result<(), AppError> {
+    let loaded = ensure_configuration_file(None)?;
+    let path = loaded.path;
+
+    let raw = fs::read_to_string(&path).map_err(|source| AppError::ReadConfig {
+        path: path.clone(),
+        source,
+    })?;
+    let mut document: toml::Table =
+        toml::from_str(&raw).map_err(|source| AppError::ParseConfig {
+            path: path.clone(),
+            source,
+        })?;
+
+    let tts = document
+        .entry("tts")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    if !tts.is_table() {
+        // Cannot happen after a successful parse above, but never destroy
+        // unexpected content silently.
+        *tts = toml::Value::Table(toml::Table::new());
+    }
+    let tts = tts.as_table_mut().expect("just ensured a table");
+    match lazy_allrounder_core::config::clamp_tts_speed(Some(speed)) {
+        Some(speed) => {
+            tts.insert(
+                "speed".to_owned(),
+                toml::Value::Float(lazy_allrounder_core::config::tts_speed_file_value(speed)),
+            );
+        }
+        None => {
+            tts.remove("speed");
+        }
+    }
+
+    let serialized =
+        toml::to_string_pretty(&document).expect("a parsed toml table always serializes");
+    let temp_path = path.with_extension("toml.tmp");
+    fs::write(&temp_path, serialized).map_err(|source| AppError::WriteConfig {
+        path: temp_path.clone(),
+        source,
+    })?;
+    fs::rename(&temp_path, &path).map_err(|source| AppError::WriteConfig { path, source })
+}
+
 /// Loads the configuration, writing a default config file first if none
 /// exists — so a fresh GUI install works without hand-editing TOML. The CLI
 /// keeps using `load_configuration` directly and stays strict.
@@ -324,6 +383,7 @@ struct RawProviderConfiguration {
     provider: Option<String>,
     model: Option<String>,
     voice: Option<String>,
+    speed: Option<f32>,
 }
 
 impl RawProviderConfiguration {
@@ -340,6 +400,8 @@ impl RawProviderConfiguration {
             provider: self.provider.unwrap_or(defaults.provider),
             model: self.model.unwrap_or(defaults.model),
             voice,
+            // Speed is a user pace preference, not tied to a model choice.
+            speed: self.speed.or(defaults.speed),
         }
     }
 }
@@ -525,6 +587,23 @@ mod tests {
         )
         .expect("custom model parses");
         assert_eq!(custom.tts.voice, None);
+    }
+
+    #[test]
+    fn parses_tts_speed_and_keeps_it_optional() {
+        let config = parse_configuration(
+            r#"
+            [tts]
+            speed = 1.3
+            "#,
+            Path::new("config.toml"),
+        )
+        .expect("tts speed should parse");
+        assert_eq!(config.tts.speed, Some(1.3));
+
+        let defaults =
+            parse_configuration("", Path::new("config.toml")).expect("empty config parses");
+        assert_eq!(defaults.tts.speed, None);
     }
 
     #[test]

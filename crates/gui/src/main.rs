@@ -30,6 +30,14 @@ fn main() {
         }
     };
 
+    // Without an installed .desktop entry the desktop cannot associate the
+    // window with a name or icon (GNOME then renders a letter fallback), so
+    // register one — best effort, never fatal.
+    #[cfg(target_os = "linux")]
+    if let Err(error) = lazy_allrounder_platform::install_desktop_integration(icon::png_bytes()) {
+        tracing::warn!("could not install the desktop entry and icon: {error}");
+    }
+
     // The overlay is the default UI everywhere. Tray mode is an explicit
     // opt-in for desktops with a real StatusNotifierItem tray — on stock
     // GNOME the tray icon would be invisible without an extension, which is
@@ -50,13 +58,13 @@ fn main() {
 
     if lazy_allrounder_platform::is_wayland_session() {
         tracing::info!(
-            "Wayland session: the compositor controls window position and \
-             stacking, and global hotkeys need desktop-native shortcuts \
-             (see the README); the badge still works with the mouse"
+            "Wayland session: global hotkeys need desktop-native shortcuts \
+             (see the README); the overlay itself runs through XWayland where \
+             available so it can stay on top, keep its corner, and be dragged"
         );
     }
 
-    if let Err(error) = overlay::run(config.overlay.corner, config.hotkeys.clone(), player) {
+    if let Err(error) = overlay::run(config, player) {
         tracing::error!("the overlay window failed: {error}");
         std::process::exit(1);
     }

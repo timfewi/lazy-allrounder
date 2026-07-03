@@ -13,6 +13,9 @@ use serde::{Deserialize, Serialize};
 // Matches the default TTS model (hexgrad/kokoro-82m) in core's config.
 const DEFAULT_TTS_VOICE: &str = "af_heart";
 const DEFAULT_TTS_RESPONSE_FORMAT: &str = "mp3";
+// Sent when no speed is configured: pins the pace at 1.0x instead of
+// delegating to the provider's default, which could drift between releases.
+const DEFAULT_TTS_SPEED: f32 = 1.0;
 
 #[derive(Debug, Clone)]
 pub struct OpenRouterClient {
@@ -140,6 +143,7 @@ impl TextGenerationPort for OpenRouterTextClient {
 pub struct OpenRouterTextToSpeechClient {
     client: OpenRouterClient,
     voice: Option<String>,
+    speed: Option<f32>,
 }
 
 impl OpenRouterTextToSpeechClient {
@@ -147,14 +151,21 @@ impl OpenRouterTextToSpeechClient {
         Self {
             client,
             voice: None,
+            speed: None,
         }
     }
 
     /// Voice is provider- and model-specific (kokoro wants "af_heart",
-    /// OpenAI-style models want "alloy"), so it is set per client rather
-    /// than threaded through the domain port.
-    pub fn with_voice(client: OpenRouterClient, voice: Option<String>) -> Self {
-        Self { client, voice }
+    /// OpenAI-style models want "alloy"), and speed is a user preference, so
+    /// both are set per client rather than threaded through the domain port.
+    /// A `None` speed sends [`DEFAULT_TTS_SPEED`]; values are clamped to the
+    /// endpoint's accepted range.
+    pub fn with_voice(client: OpenRouterClient, voice: Option<String>, speed: Option<f32>) -> Self {
+        Self {
+            client,
+            voice,
+            speed: lazy_allrounder_core::config::clamp_tts_speed(speed),
+        }
     }
 }
 
@@ -166,7 +177,7 @@ impl TextToSpeechPort for OpenRouterTextToSpeechClient {
             input: text,
             voice: self.voice.as_deref().unwrap_or(DEFAULT_TTS_VOICE),
             response_format: DEFAULT_TTS_RESPONSE_FORMAT,
-            speed: Some(1.0),
+            speed: Some(self.speed.unwrap_or(DEFAULT_TTS_SPEED)),
         };
 
         let response = self

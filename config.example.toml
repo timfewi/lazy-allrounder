@@ -14,6 +14,9 @@ model = "openai/whisper-large-v3-turbo"
 provider = "openrouter"
 model = "hexgrad/kokoro-82m"
 voice = "af_heart"
+# Speaking speed multiplier (0.25–4.0; 1.0 = the provider default). Also
+# adjustable live from the overlay panel's "Voice speed" slider.
+# speed = 1.3
 
 # Floating badge overlay (the GUI's default mode).
 [overlay]

@@ -99,7 +99,8 @@ pub(crate) async fn run_action(
     player: &AudioPlayer,
     request: ActionRequest,
 ) -> Result<(), String> {
-    let read_clipboard = lazy_allrounder_platform::read_clipboard_text;
+    // Selection-first: highlighting text is enough; Ctrl+C stays optional.
+    let read_clipboard = lazy_allrounder_platform::read_selection_or_clipboard_text;
 
     match request.mode {
         Mode::Read => {

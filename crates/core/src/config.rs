@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderConfiguration {
     pub provider: String,
     pub model: String,
@@ -8,6 +8,10 @@ pub struct ProviderConfiguration {
     /// (e.g. kokoro's "af_heart"). None lets the provider client choose.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voice: Option<String>,
+    /// Speaking speed multiplier; only meaningful for the TTS pipeline.
+    /// None lets the provider use its default pace (1.0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed: Option<f32>,
 }
 
 impl ProviderConfiguration {
@@ -16,6 +20,7 @@ impl ProviderConfiguration {
             provider: provider.to_owned(),
             model: model.to_owned(),
             voice: None,
+            speed: None,
         }
     }
 
@@ -24,8 +29,35 @@ impl ProviderConfiguration {
             provider: provider.to_owned(),
             model: model.to_owned(),
             voice: Some(voice.to_owned()),
+            speed: None,
         }
     }
+}
+
+/// The range of speaking speeds the OpenAI-compatible speech endpoint (and
+/// kokoro) accepts; config values are clamped into it before use.
+pub const TTS_SPEED_RANGE: std::ops::RangeInclusive<f32> = 0.25..=4.0;
+
+/// Clamps a configured speaking speed into [`TTS_SPEED_RANGE`], mapping
+/// non-finite values to the provider default (None).
+pub fn clamp_tts_speed(speed: Option<f32>) -> Option<f32> {
+    speed
+        .filter(|speed| speed.is_finite())
+        .map(|speed| speed.clamp(*TTS_SPEED_RANGE.start(), *TTS_SPEED_RANGE.end()))
+}
+
+/// A speed as it should be written to the config file: quantized to two
+/// decimals in f64 so a raw f32 never drags float dust into the TOML
+/// (1.3f32 as f64 is 1.2999999…).
+pub fn tts_speed_file_value(speed: f32) -> f64 {
+    (f64::from(speed) * 100.0).round() / 100.0
+}
+
+/// The same two-decimal grid as [`tts_speed_file_value`], as f32 — the GUI
+/// slider and the persisted value must share one quantization, or a stored
+/// speed re-read from disk would register as a phantom "change".
+pub fn round_tts_speed(speed: f32) -> f32 {
+    tts_speed_file_value(speed) as f32
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,7 +126,7 @@ impl HotkeysConfiguration {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfiguration {
     #[serde(default = "default_text_configuration")]

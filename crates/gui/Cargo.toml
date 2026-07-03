@@ -33,3 +33,7 @@ tray-icon.workspace = true
 # tray-icon's Linux backend is GTK-based; the tray event loop must run a GTK
 # main loop, which requires depending on the same gtk version tray-icon uses.
 gtk = "0.18"
+# For forcing the X11 (XWayland) backend on Wayland sessions, where native
+# Wayland windows cannot stay on top, position themselves, or be dragged
+# reliably. Must match eframe's winit.
+winit.workspace = true

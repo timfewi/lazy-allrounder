@@ -47,16 +47,18 @@ After installing, follow **Configuration** below (an OpenRouter API key + one co
 
 ## GUI
 
-- The badge sits in the corner configured under `[overlay]` (default bottom-right).
-- Global hotkeys (X11/macOS/Windows; defaults under `[hotkeys]`): `Super+S` read clipboard aloud, `Super+W` summarize, `Super+A` explain, `Super+Shift+A` ask, `Super+D` toggle dictation. Pressing a hotkey while audio plays stops it.
+- The badge sits in the corner configured under `[overlay]` (default bottom-right) and can be dragged anywhere; the panel expands from wherever it sits.
+- Reading works from the current text **selection** first — just highlight text and hit a mode; copying to the clipboard still works as the fallback.
+- The panel's **Voice speed** slider controls the speaking pace (also persisted as `speed` under `[tts]` in the config).
+- Global hotkeys (X11/macOS/Windows; defaults under `[hotkeys]`): `Super+S` read aloud, `Super+W` summarize, `Super+A` explain, `Super+Shift+A` ask, `Super+D` toggle dictation. Pressing a hotkey while audio plays stops it.
 - Clicking the badge opens the panel: mode buttons, a question box for ask mode, a stop button while busy, and quit.
+- On first start the GUI installs a per-user `.desktop` entry and icon (`~/.local/share/applications/lazy-allrounder.desktop`), so the window shows the waveform icon instead of a letter fallback.
 
 ### Wayland notes (GNOME etc.)
 
-Wayland compositors do not let applications position themselves, stay always-on-top, or grab global hotkeys:
+Native Wayland windows cannot position themselves, stay always-on-top, or grab global hotkeys — the compositor owns all of that. The GUI therefore runs through **XWayland** on Wayland sessions (when `DISPLAY` is available), which restores always-on-top, corner placement, and dragging. Set `LAZY_ALLROUNDER_BACKEND=wayland` to force the native backend instead (or `=x11` to force XWayland).
 
-- The badge opens as a normal window — position it once by hand (GNOME: right-click title area → Always on Top also works via `Super+Space` menu).
-- For hotkeys, add desktop-native shortcuts that call the CLI, e.g. GNOME Settings → Keyboard → Custom Shortcuts with a command like `sh -c 'wl-paste | lazy-allrounder summarize --stdin'`.
+- For global hotkeys, add desktop-native shortcuts that call the CLI, e.g. GNOME Settings → Keyboard → Custom Shortcuts with a command like `sh -c 'wl-paste | lazy-allrounder summarize --stdin'`.
 - `LAZY_ALLROUNDER_UI=tray lazy-allrounder-gui` runs a tray-icon mode instead (needs a StatusNotifierItem tray; on GNOME that means the AppIndicator extension).
 
 ## Roadmap

@@ -26,8 +26,8 @@ pub fn clipboard_text(
 ) -> Result<String, String> {
     match check_clipboard(read_clipboard) {
         ClipboardCheck::Ready(text) => Ok(text),
-        ClipboardCheck::Empty => Err("clipboard is empty".to_owned()),
-        ClipboardCheck::Unavailable(message) => Err(format!("clipboard unavailable: {message}")),
+        ClipboardCheck::Empty => Err("nothing to read — select text or copy it first".to_owned()),
+        ClipboardCheck::Unavailable(message) => Err(format!("could not read text: {message}")),
     }
 }
 
@@ -87,13 +87,13 @@ mod tests {
         );
         assert_eq!(
             clipboard_text(|| Ok(String::new())),
-            Err("clipboard is empty".to_owned())
+            Err("nothing to read — select text or copy it first".to_owned())
         );
         assert_eq!(
             clipboard_text(|| Err(PortError::Other {
                 message: "boom".to_owned()
             })),
-            Err("clipboard unavailable: boom".to_owned())
+            Err("could not read text: boom".to_owned())
         );
     }
 }
