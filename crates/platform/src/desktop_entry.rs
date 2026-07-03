@@ -28,6 +28,18 @@ const LEGACY_APP_ID: &str = "lazy-allrounder";
 /// precedence, the per-user copy shadows the system one instead of showing
 /// up as a duplicate launcher.
 pub fn install_desktop_integration(icon_png: &[u8]) -> Result<(), PortError> {
+    let exe = std::env::current_exe().map_err(|error| PortError::Other {
+        message: format!("could not determine the app's own path: {error}"),
+    })?;
+
+    // A store path means a package manager (Nix) owns the desktop
+    // integration; a per-user copy would shadow it with an Exec that goes
+    // stale on the next rebuild.
+    if is_store_managed(&exe) {
+        tracing::info!("nix-store managed binary: leaving desktop integration to the package");
+        return Ok(());
+    }
+
     let data_home = xdg_data_home()?;
 
     let icon_path = data_home
@@ -35,9 +47,6 @@ pub fn install_desktop_integration(icon_png: &[u8]) -> Result<(), PortError> {
         .join(format!("{APP_ID}.png"));
     write_if_changed(&icon_path, icon_png)?;
 
-    let exe = std::env::current_exe().map_err(|error| PortError::Other {
-        message: format!("could not determine the app's own path: {error}"),
-    })?;
     let entry = desktop_entry(&exe.to_string_lossy());
     let entry_path = data_home
         .join("applications")
@@ -57,6 +66,12 @@ pub fn install_desktop_integration(icon_png: &[u8]) -> Result<(), PortError> {
     );
 
     Ok(())
+}
+
+/// Whether the running binary was installed by Nix, whose packaging ships
+/// its own desktop item.
+fn is_store_managed(exe: &std::path::Path) -> bool {
+    exe.starts_with("/nix/store")
 }
 
 fn xdg_data_home() -> Result<PathBuf, PortError> {
@@ -175,6 +190,20 @@ mod tests {
     fn percent_is_doubled_in_both_quoted_and_unquoted_paths() {
         assert_eq!(quote_exec("/tmp/50%off/app"), "/tmp/50%%off/app");
         assert_eq!(quote_exec("/tmp/50% off/app"), "\"/tmp/50%% off/app\"");
+    }
+
+    #[test]
+    fn nix_store_binaries_are_recognized_as_package_managed() {
+        assert!(is_store_managed(std::path::Path::new(
+            "/nix/store/abc123-lazy-allrounder-gui-0.1.0/bin/lazy-allrounder-gui"
+        )));
+        assert!(!is_store_managed(std::path::Path::new(
+            "/home/tim/code/lazy-allrounder/target/debug/lazy-allrounder-gui"
+        )));
+        // Not the store itself, just a lookalike prefix.
+        assert!(!is_store_managed(std::path::Path::new(
+            "/nix/storefront/bin/app"
+        )));
     }
 
     #[test]

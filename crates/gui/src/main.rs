@@ -6,6 +6,7 @@ use tracing_subscriber::{EnvFilter, fmt};
 mod actions;
 mod hotkeys;
 mod icon;
+mod ipc;
 mod overlay;
 mod session;
 mod state;

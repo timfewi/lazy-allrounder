@@ -30,6 +30,9 @@ pub struct PanelInputs<'a> {
     pub onboarding_error: Option<&'a str>,
     pub autostart_enabled: bool,
     pub speech_speed: &'a mut f32,
+    /// One-shot: give the Ask question field keyboard focus this frame (the
+    /// `A` accelerator, or an Ask trigger arriving from outside the window).
+    pub focus_question: bool,
 }
 
 pub fn draw(ui: &mut Ui, inputs: PanelInputs<'_>) -> PanelResponse {
@@ -72,6 +75,7 @@ pub fn draw(ui: &mut Ui, inputs: PanelInputs<'_>) -> PanelResponse {
                 inputs.state,
                 inputs.question,
                 inputs.speech_speed,
+                inputs.focus_question,
                 &mut response,
             );
         }
@@ -165,12 +169,17 @@ fn draw_modes(
     state: &OverlayState,
     question: &mut String,
     speech_speed: &mut f32,
+    focus_question: bool,
     response: &mut PanelResponse,
 ) {
     let busy = state.is_busy();
 
-    for mode in [Mode::Read, Mode::Summarize, Mode::Explain] {
-        if mode_button(ui, mode.label(), busy) {
+    for (mode, hint) in [
+        (Mode::Read, "R"),
+        (Mode::Summarize, "S"),
+        (Mode::Explain, "E"),
+    ] {
+        if mode_button(ui, mode.label(), hint, busy) {
             response.trigger = Some(mode);
         }
     }
@@ -181,17 +190,25 @@ fn draw_modes(
             .color(theme::TEXT_MUTED)
             .size(12.0),
     );
-    ui.add(
+    let question_field = ui.add(
         TextEdit::singleline(question)
             .hint_text("Type a question…")
             .desired_width(f32::INFINITY),
     );
-    if mode_button(ui, Mode::Ask.label(), busy) {
+    if focus_question {
+        question_field.request_focus();
+    }
+    // Enter submits, mirroring the onboarding key field: egui reports the
+    // Enter press as a lost_focus on the field in the same frame.
+    let question_submitted = question_field.lost_focus()
+        && ui.input(|input| input.key_pressed(egui::Key::Enter))
+        && !question.trim().is_empty();
+    if mode_button(ui, Mode::Ask.label(), "A", busy) || (question_submitted && !busy) {
         response.trigger = Some(Mode::Ask);
     }
 
     ui.add_space(6.0);
-    if mode_button(ui, Mode::Dictate.label(), busy) {
+    if mode_button(ui, Mode::Dictate.label(), "D", busy) {
         response.trigger = Some(Mode::Dictate);
     }
 
@@ -226,7 +243,10 @@ fn draw_modes(
             ui.horizontal(|ui| {
                 ui.spinner();
                 ui.colored_label(theme::TEXT_MUTED, mode.busy_label());
-                if ui.button("Stop").clicked() {
+                if ui
+                    .add(Button::new("Stop").shortcut_text(shortcut_hint("Esc")))
+                    .clicked()
+                {
                     response.stop = true;
                 }
             });
@@ -254,11 +274,19 @@ fn styled_button(ui: &Ui, label: &str) -> Button<'static> {
     .corner_radius(CornerRadius::same(10))
 }
 
-fn mode_button(ui: &mut Ui, label: &str, busy: bool) -> bool {
+fn mode_button(ui: &mut Ui, label: &str, hint: &str, busy: bool) -> bool {
     let button = Button::new(RichText::new(label).color(theme::TEXT_PRIMARY).size(14.0))
+        .shortcut_text(shortcut_hint(hint))
         .fill(theme::SURFACE_RAISED)
         .corner_radius(CornerRadius::same(10))
         .min_size(vec2(ui.available_width(), 34.0));
 
     ui.add_enabled(!busy, button).clicked()
+}
+
+/// The muted single-letter accelerator hint shown at a button's right edge.
+fn shortcut_hint(hint: &str) -> RichText {
+    RichText::new(hint.to_owned())
+        .color(theme::TEXT_MUTED)
+        .size(11.0)
 }

@@ -17,11 +17,14 @@ use lazy_allrounder_integrations::{
     OpenRouterTextToSpeechClient,
 };
 pub use lazy_allrounder_platform::{DictateState, DictateStatus};
+// Re-exported for the CLI, which talks to the running GUI (and notifies the
+// desktop) without depending on the platform crate directly.
 use lazy_allrounder_platform::{
     DictateToggleResult, PendingDictation, capture_microphone_until_enter, dictate_start,
     dictate_status as platform_dictate_status, dictate_stop, dictate_toggle,
     insert_text_into_focused_app,
 };
+pub use lazy_allrounder_platform::{GuiAction, GuiCommand, SendError, notify, send_gui_command};
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -52,7 +55,11 @@ pub enum AppError {
     Core(#[from] CoreError),
     #[error("provider initialization failed: {0}")]
     Provider(String),
-    #[error("no OpenRouter API key found — set OPENROUTER_API_KEY or save a key in the app panel")]
+    #[error(
+        "no OpenRouter API key found — set OPENROUTER_API_KEY, point \
+         OPENROUTER_API_KEY_FILE at a file containing the key, or save a key \
+         in the app panel"
+    )]
     MissingApiKey,
     #[error("failed to write configuration file at {path}: {source}")]
     WriteConfig {
@@ -235,22 +242,58 @@ pub fn default_config_path() -> Result<PathBuf, AppError> {
 }
 
 /// The OpenRouter API key, if one is available: the environment variable
-/// wins (power users, scripts, CI), then the OS keyring (saved through the
-/// app panel's onboarding).
+/// wins (power users, scripts, CI), then a key file named by
+/// `OPENROUTER_API_KEY_FILE` (secret managers like agenix/sops expose
+/// secrets as root-owned-store-free files), then the OS keyring (saved
+/// through the app panel's onboarding).
 pub fn resolve_api_key() -> Option<String> {
-    if let Ok(from_env) = std::env::var("OPENROUTER_API_KEY")
+    resolve_api_key_from(
+        std::env::var("OPENROUTER_API_KEY").ok(),
+        std::env::var("OPENROUTER_API_KEY_FILE").ok(),
+        |path| fs::read_to_string(path),
+        || match lazy_allrounder_platform::load_api_key() {
+            Ok(stored) => stored,
+            Err(error) => {
+                tracing::warn!("could not check the OS keyring for an API key: {error}");
+                None
+            }
+        },
+    )
+}
+
+/// Pure resolution order behind [`resolve_api_key`]. A key file that cannot
+/// be read or is empty logs and falls through to the keyring: an unreadable
+/// secret path (agenix not rebuilt yet, wrong machine) must degrade to the
+/// other sources, not disable them.
+fn resolve_api_key_from(
+    env_key: Option<String>,
+    key_file: Option<String>,
+    read_file: impl Fn(&str) -> std::io::Result<String>,
+    keyring: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    if let Some(from_env) = env_key
         && !from_env.trim().is_empty()
     {
         return Some(from_env);
     }
 
-    match lazy_allrounder_platform::load_api_key() {
-        Ok(stored) => stored,
-        Err(error) => {
-            tracing::warn!("could not check the OS keyring for an API key: {error}");
-            None
+    if let Some(path) = key_file.filter(|path| !path.trim().is_empty()) {
+        match read_file(&path) {
+            Ok(content) => {
+                let key = content.trim();
+                if key.is_empty() {
+                    tracing::warn!("the key file at {path} is empty, trying the keyring");
+                } else {
+                    return Some(key.to_owned());
+                }
+            }
+            Err(error) => {
+                tracing::warn!("could not read the key file at {path}: {error}");
+            }
         }
     }
+
+    keyring()
 }
 
 /// Saves the key to the OS keyring for future runs.
@@ -636,5 +679,62 @@ mod tests {
         .expect_err("invalid corner should fail");
 
         assert!(matches!(error, super::AppError::ParseConfig { .. }));
+    }
+
+    fn no_file(_path: &str) -> std::io::Result<String> {
+        panic!("the key file must not be consulted in this case");
+    }
+
+    #[test]
+    fn env_key_wins_over_file_and_keyring() {
+        let key = super::resolve_api_key_from(
+            Some("sk-env".to_owned()),
+            Some("/run/agenix/openrouter-api-key".to_owned()),
+            no_file,
+            || panic!("the keyring must not be consulted in this case"),
+        );
+        assert_eq!(key.as_deref(), Some("sk-env"));
+    }
+
+    #[test]
+    fn blank_env_key_falls_through_to_the_file() {
+        let key = super::resolve_api_key_from(
+            Some("   ".to_owned()),
+            Some("/keys/openrouter".to_owned()),
+            |path| {
+                assert_eq!(path, "/keys/openrouter");
+                Ok("  sk-file\n".to_owned())
+            },
+            || panic!("the keyring must not be consulted in this case"),
+        );
+        assert_eq!(key.as_deref(), Some("sk-file"), "file content is trimmed");
+    }
+
+    #[test]
+    fn empty_key_file_falls_through_to_the_keyring() {
+        let key = super::resolve_api_key_from(
+            None,
+            Some("/keys/openrouter".to_owned()),
+            |_| Ok("\n".to_owned()),
+            || Some("sk-keyring".to_owned()),
+        );
+        assert_eq!(key.as_deref(), Some("sk-keyring"));
+    }
+
+    #[test]
+    fn unreadable_key_file_falls_through_to_the_keyring() {
+        let key = super::resolve_api_key_from(
+            None,
+            Some("/keys/openrouter".to_owned()),
+            |_| Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+            || Some("sk-keyring".to_owned()),
+        );
+        assert_eq!(key.as_deref(), Some("sk-keyring"));
+    }
+
+    #[test]
+    fn no_source_at_all_yields_none() {
+        let key = super::resolve_api_key_from(None, None, no_file, || None);
+        assert_eq!(key, None);
     }
 }

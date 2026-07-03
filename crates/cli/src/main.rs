@@ -6,8 +6,9 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use lazy_allrounder_app::{
-    Application, DictateCaptureOutcome, DictateState, dictate_runtime_status,
-    dictate_start_capture, dictate_stop_capture, dictate_toggle_capture, load_configuration,
+    Application, DictateCaptureOutcome, DictateState, GuiAction, GuiCommand, SendError,
+    dictate_runtime_status, dictate_start_capture, dictate_stop_capture, dictate_toggle_capture,
+    load_configuration, notify, send_gui_command,
 };
 use tracing_subscriber::{EnvFilter, fmt};
 
@@ -44,7 +45,26 @@ enum Command {
         #[arg(long)]
         question: String,
     },
+    /// Control a running overlay GUI (desktop keyboard shortcuts call this).
+    Gui {
+        #[command(subcommand)]
+        action: GuiCliAction,
+    },
     ConfigPath,
+}
+
+/// Commands forwarded to the overlay over its control socket. `dictate`
+/// falls back to the headless recorder when no GUI is running, so a desktop
+/// shortcut keeps working either way.
+#[derive(Debug, Clone, Copy, Subcommand)]
+enum GuiCliAction {
+    Toggle,
+    Read,
+    Summarize,
+    Explain,
+    Ask,
+    Dictate,
+    Stop,
 }
 
 #[derive(Debug, clap::Args)]
@@ -206,6 +226,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let output_path = write_audio_output("ask", input.output.as_deref(), &audio)?;
             println!("{content}\n\nAudio: {}", output_path.display());
         }
+        Command::Gui { action } => handle_gui(action, cli.config.as_deref()).await?,
         Command::ConfigPath => {
             println!(
                 "{}",
@@ -215,6 +236,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+async fn handle_gui(
+    action: GuiCliAction,
+    config_path: Option<&Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let command = match action {
+        GuiCliAction::Toggle => GuiCommand::TogglePanel,
+        GuiCliAction::Stop => GuiCommand::Stop,
+        GuiCliAction::Read => GuiCommand::Trigger(GuiAction::Read),
+        GuiCliAction::Summarize => GuiCommand::Trigger(GuiAction::Summarize),
+        GuiCliAction::Explain => GuiCommand::Trigger(GuiAction::Explain),
+        GuiCliAction::Ask => GuiCommand::Trigger(GuiAction::Ask),
+        GuiCliAction::Dictate => GuiCommand::Trigger(GuiAction::Dictate),
+    };
+
+    match send_gui_command(command) {
+        Ok(()) => Ok(()),
+        Err(SendError::NotRunning) => match action {
+            // Dictation works GUI-less: same engine, same runtime files —
+            // reuse the exact hotkey-toggle path.
+            GuiCliAction::Dictate => {
+                handle_hotkey(
+                    HotkeyCommand {
+                        mode: HotkeyMode::Toggle,
+                        output: None,
+                    },
+                    config_path,
+                )
+                .await
+            }
+            // A stop with nothing running is what the user wanted anyway.
+            GuiCliAction::Stop => {
+                eprintln!("nothing to stop: the overlay GUI is not running");
+                Ok(())
+            }
+            _ => {
+                // The likely caller is a desktop shortcut with no terminal;
+                // the notification is the only visible feedback.
+                notify(
+                    "Lazy Allrounder",
+                    "The overlay is not running — start it from the app grid \
+                     (or: systemctl --user start lazy-allrounder-gui)",
+                );
+                Err("the overlay GUI is not running".into())
+            }
+        },
+        Err(error) => Err(error.to_string().into()),
+    }
 }
 
 async fn handle_dictate(
@@ -282,38 +352,51 @@ async fn handle_dictate(
     Ok(())
 }
 
+/// The desktop-shortcut entry point for dictation. A shortcut-spawned
+/// process has no terminal, so desktop notifications carry the feedback:
+/// recording started, transcript delivered, or what went wrong.
 async fn handle_hotkey(
     hotkey: HotkeyCommand,
     config_path: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    match hotkey.mode {
-        HotkeyMode::Toggle => {
-            let capture = dictate_toggle_capture()?;
+    let result = run_hotkey(&hotkey, config_path).await;
+    if let Err(error) = &result {
+        notify("Dictation failed", &error.to_string());
+    }
 
-            match capture {
-                DictateCaptureOutcome::Started => {
-                    println!("{}", DictateState::Recording.as_str());
-                }
-                pending => {
-                    let application = load_application(config_path)?;
-                    finish_dictation_capture(&application, pending, hotkey.output.as_deref())
-                        .await?;
-                }
-            }
-        }
+    result
+}
+
+async fn run_hotkey(
+    hotkey: &HotkeyCommand,
+    config_path: Option<&Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let capture = match hotkey.mode {
+        HotkeyMode::Toggle => dictate_toggle_capture()?,
         HotkeyMode::Start => {
             dictate_start_capture()?;
+            DictateCaptureOutcome::Started
+        }
+        HotkeyMode::Stop => DictateCaptureOutcome::Pending(dictate_stop_capture()?),
+    };
+
+    match capture {
+        DictateCaptureOutcome::Started => {
+            notify("Dictation", "Recording — press the shortcut again to stop.");
             println!("{}", DictateState::Recording.as_str());
         }
-        HotkeyMode::Stop => {
-            let pending = dictate_stop_capture()?;
+        pending => {
             let application = load_application(config_path)?;
-            finish_dictation_capture(
-                &application,
-                DictateCaptureOutcome::Pending(pending),
-                hotkey.output.as_deref(),
-            )
-            .await?;
+            let wrote_to_file = hotkey.output.is_some();
+            finish_dictation_capture(&application, pending, hotkey.output.as_deref()).await?;
+            notify(
+                "Dictation",
+                if wrote_to_file {
+                    "Transcript saved."
+                } else {
+                    "Transcript inserted."
+                },
+            );
         }
     }
 
@@ -544,6 +627,43 @@ mod tests {
             .expect("microphone input should parse");
 
         assert!(matches!(cli.command, super::Command::Dictate { .. }));
+    }
+
+    #[test]
+    fn gui_subcommands_parse() {
+        let toggle = Cli::try_parse_from(["lazy-allrounder", "gui", "toggle"])
+            .expect("gui toggle should parse");
+        assert!(matches!(
+            toggle.command,
+            Command::Gui {
+                action: super::GuiCliAction::Toggle
+            }
+        ));
+
+        let dictate = Cli::try_parse_from(["lazy-allrounder", "gui", "dictate"])
+            .expect("gui dictate should parse");
+        assert!(matches!(
+            dictate.command,
+            Command::Gui {
+                action: super::GuiCliAction::Dictate
+            }
+        ));
+
+        let stop =
+            Cli::try_parse_from(["lazy-allrounder", "gui", "stop"]).expect("gui stop should parse");
+        assert!(matches!(
+            stop.command,
+            Command::Gui {
+                action: super::GuiCliAction::Stop
+            }
+        ));
+    }
+
+    #[test]
+    fn gui_requires_an_action() {
+        Cli::try_parse_from(["lazy-allrounder", "gui"]).expect_err("bare gui should fail");
+        Cli::try_parse_from(["lazy-allrounder", "gui", "dance"])
+            .expect_err("unknown gui action should fail");
     }
 
     #[test]

@@ -5,6 +5,7 @@ mod desktop_entry;
 mod dictate_runtime;
 mod display;
 mod hotkeys;
+mod ipc;
 mod notifications;
 mod playback;
 mod secrets;
@@ -27,6 +28,9 @@ pub use dictate_runtime::{
 };
 pub use display::{SessionKind, is_wayland_session, session_kind};
 pub use hotkeys::{RegisteredHotkeys, next_hotkey_press, parse_binding, register_hotkeys};
+pub use ipc::{GuiAction, GuiCommand, SendError, send_gui_command};
+#[cfg(unix)]
+pub use ipc::{GuiCommandListener, gui_socket_path};
 pub use notifications::notify;
 pub use playback::AudioPlayer;
 pub use secrets::{delete_api_key, load_api_key, store_api_key};

@@ -5,6 +5,7 @@ mod panel;
 pub mod theme;
 pub mod viewport;
 
+use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use eframe::NativeOptions;
@@ -15,9 +16,8 @@ use lazy_allrounder_core::config::{
 };
 use lazy_allrounder_platform::AudioPlayer;
 
-use crate::hotkeys::HotkeyEvents;
 use crate::session::Session;
-use crate::state::{Activity, Mode, OverlayState};
+use crate::state::{Activity, Mode, OverlayState, UiEvent};
 
 const EXPAND_SECONDS: f32 = 0.22;
 
@@ -33,7 +33,8 @@ pub enum StartupState {
 pub struct OverlayApp {
     state: OverlayState,
     session: Option<Session>,
-    hotkeys: Option<HotkeyEvents>,
+    /// External inputs: global hotkeys and CLI control-socket commands.
+    events: Receiver<UiEvent>,
     startup: StartupState,
     geometry: viewport::Geometry,
     question: String,
@@ -48,12 +49,21 @@ pub struct OverlayApp {
     openness: f32,
     was_focused: Option<bool>,
     was_occluded: Option<bool>,
+    /// A panel opened by an event (hotkey/CLI) starts unfocused; click-away
+    /// close stays disarmed until the window has actually gained focus once,
+    /// or the panel would slam shut before the focus grab lands. Sticky on
+    /// purpose: if the compositor refuses focus, not auto-closing is the
+    /// lesser evil.
+    suppress_click_away: bool,
+    /// One-shot request: the Ask field grabs keyboard focus on the next
+    /// frame that actually draws the panel.
+    focus_question_field: bool,
     player: AudioPlayer,
 }
 
 impl OverlayApp {
     pub fn new(
-        hotkeys: Option<HotkeyEvents>,
+        events: Receiver<UiEvent>,
         corner: OverlayCorner,
         player: AudioPlayer,
         speech_speed: Option<f32>,
@@ -72,7 +82,7 @@ impl OverlayApp {
         Self {
             state: OverlayState::new(),
             session: None,
-            hotkeys,
+            events,
             startup: StartupState::NeedsApiKey,
             geometry: viewport::Geometry::new(corner),
             question: String::new(),
@@ -84,7 +94,34 @@ impl OverlayApp {
             openness: 0.0,
             was_focused: None,
             was_occluded: None,
+            suppress_click_away: false,
+            focus_question_field: false,
             player,
+        }
+    }
+
+    /// Opens the panel in response to an external event (hotkey or CLI
+    /// command). Unlike a badge click, the window may be unfocused, so grab
+    /// focus (keys should land in the panel) and disarm click-away until the
+    /// grab is observed.
+    fn open_panel_via_event(&mut self, ctx: &Context) {
+        self.state.panel_open = true;
+        self.suppress_click_away = true;
+        ctx.send_viewport_cmd(ViewportCommand::Focus);
+    }
+
+    /// The one close path: every way of closing the panel must also clear
+    /// the event-open bookkeeping, or a stale flag would leak into the next
+    /// open.
+    fn close_panel(&mut self) {
+        self.state.close_panel();
+        self.suppress_click_away = false;
+        self.focus_question_field = false;
+    }
+
+    fn stop_playback(&self) {
+        if let Some(session) = &self.session {
+            session.stop_playback();
         }
     }
 
@@ -217,19 +254,29 @@ impl eframe::App for OverlayApp {
         }
         self.state.tick(now);
 
-        // Hotkey-triggered actions: Ask needs a typed question, so its
-        // hotkey opens the panel instead of firing blindly.
-        while let Some(mode) = self.hotkeys.as_ref().and_then(HotkeyEvents::poll) {
-            if mode == Mode::Ask {
-                self.state.panel_open = true;
-            } else if self.state.is_busy() {
-                // Pressing a hotkey while an action runs stops the audio —
-                // the same toggle feel as the old GNOME bindings.
-                if let Some(session) = &self.session {
-                    session.stop_playback();
+        // External inputs (global hotkeys, CLI control socket). Ask needs a
+        // typed question, so its trigger opens the panel instead of firing
+        // blindly.
+        while let Ok(event) = self.events.try_recv() {
+            match event {
+                UiEvent::TogglePanel => {
+                    if self.state.panel_open {
+                        self.close_panel();
+                    } else {
+                        self.open_panel_via_event(ctx);
+                    }
                 }
-            } else {
-                self.trigger(mode, now);
+                UiEvent::Stop => self.stop_playback(),
+                UiEvent::Trigger(Mode::Ask) => {
+                    self.open_panel_via_event(ctx);
+                    self.focus_question_field = true;
+                }
+                UiEvent::Trigger(_) if self.state.is_busy() => {
+                    // A trigger while an action runs stops the audio — the
+                    // same toggle feel as the old GNOME bindings.
+                    self.stop_playback();
+                }
+                UiEvent::Trigger(mode) => self.trigger(mode, now),
             }
         }
 
@@ -260,8 +307,13 @@ impl eframe::App for OverlayApp {
         self.was_occluded = occluded;
 
         // Click-away: closing when the window loses focus while expanded.
-        if self.state.panel_open && focused == Some(false) {
-            self.state.close_panel();
+        // An event-opened panel is exempt until its focus grab has landed —
+        // it starts life unfocused, which is not a click-away.
+        if self.suppress_click_away && focused == Some(true) {
+            self.suppress_click_away = false;
+        }
+        if self.state.panel_open && focused == Some(false) && !self.suppress_click_away {
+            self.close_panel();
         }
 
         // Keep animating the pulse while an action runs or a result lingers;
@@ -275,6 +327,21 @@ impl eframe::App for OverlayApp {
         let ctx = ui.ctx().clone();
         let now = ctx.input(|input| input.time);
 
+        // Keyboard input is read (and consumed) before any widget draws, but
+        // only while no text field owns the keyboard — typing a question
+        // must never fire an action. `wants_keyboard_input` reflects the
+        // previous frame, which costs one frame of accuracy around focus
+        // changes and avoids stealing keys from the field.
+        let typing = ctx.egui_wants_keyboard_input();
+        let escape_pressed = !typing
+            && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+        let accelerator = if !typing && self.openness >= 0.05 && self.startup == StartupState::Ready
+        {
+            consume_accelerator(&ctx)
+        } else {
+            None
+        };
+
         let mut panel_response = panel::PanelResponse::default();
         if self.openness < 0.05 {
             let badge = badge::draw(ui, &self.state, now);
@@ -286,7 +353,13 @@ impl eframe::App for OverlayApp {
             if badge.drag_started_by(egui::PointerButton::Primary) {
                 ctx.send_viewport_cmd(ViewportCommand::StartDrag);
             } else if badge.clicked() {
-                self.state.toggle_panel();
+                if self.state.panel_open {
+                    self.close_panel();
+                } else {
+                    // A click already carries focus with it, so the plain
+                    // open path needs no click-away suppression.
+                    self.state.panel_open = true;
+                }
             }
         } else {
             theme::panel_frame().show(ui, |ui| {
@@ -301,9 +374,33 @@ impl eframe::App for OverlayApp {
                         onboarding_error: self.onboarding_error.as_deref(),
                         autostart_enabled: self.autostart_enabled,
                         speech_speed: &mut self.speech_speed,
+                        focus_question: self.focus_question_field,
                     },
                 );
             });
+            // The request reached a drawn panel this frame; a fresh one (set
+            // below or by an event) survives until the panel next draws.
+            self.focus_question_field = false;
+        }
+
+        // Accelerators merge into the same dispatch as the panel buttons.
+        if let Some(key) = accelerator {
+            match keyboard_intent(key, self.state.is_busy()) {
+                KeyIntent::Trigger(mode) => {
+                    if panel_response.trigger.is_none() {
+                        panel_response.trigger = Some(mode);
+                    }
+                }
+                KeyIntent::FocusQuestion => self.focus_question_field = true,
+                KeyIntent::Nothing => {}
+            }
+        }
+        if escape_pressed {
+            if self.state.is_busy() {
+                self.stop_playback();
+            } else if self.state.panel_open {
+                self.close_panel();
+            }
         }
 
         if let Some(mode) = panel_response.trigger {
@@ -325,18 +422,63 @@ impl eframe::App for OverlayApp {
         if let Some(enabled) = panel_response.set_autostart {
             self.set_autostart(enabled);
         }
-        if panel_response.stop
-            && let Some(session) = &self.session
-        {
-            session.stop_playback();
+        if panel_response.stop {
+            self.stop_playback();
         }
         if panel_response.close {
-            self.state.close_panel();
+            self.close_panel();
         }
         if panel_response.quit {
             ctx.send_viewport_cmd(ViewportCommand::Close);
         }
     }
+}
+
+/// The single-letter accelerators available while the panel is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PanelKey {
+    Read,
+    Summarize,
+    Explain,
+    Ask,
+    Dictate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyIntent {
+    Trigger(Mode),
+    FocusQuestion,
+    Nothing,
+}
+
+/// What a consumed accelerator should do given the current activity. Busy
+/// blocks new triggers — exactly like the disabled buttons — while focusing
+/// the Ask field stays allowed (typing during playback is harmless).
+fn keyboard_intent(key: PanelKey, busy: bool) -> KeyIntent {
+    match key {
+        PanelKey::Ask => KeyIntent::FocusQuestion,
+        _ if busy => KeyIntent::Nothing,
+        PanelKey::Read => KeyIntent::Trigger(Mode::Read),
+        PanelKey::Summarize => KeyIntent::Trigger(Mode::Summarize),
+        PanelKey::Explain => KeyIntent::Trigger(Mode::Explain),
+        PanelKey::Dictate => KeyIntent::Trigger(Mode::Dictate),
+    }
+}
+
+fn consume_accelerator(ctx: &Context) -> Option<PanelKey> {
+    const KEYS: [(egui::Key, PanelKey); 5] = [
+        (egui::Key::R, PanelKey::Read),
+        (egui::Key::S, PanelKey::Summarize),
+        (egui::Key::E, PanelKey::Explain),
+        (egui::Key::A, PanelKey::Ask),
+        (egui::Key::D, PanelKey::Dictate),
+    ];
+
+    ctx.input_mut(|input| {
+        KEYS.iter()
+            .find(|(key, _)| input.consume_key(egui::Modifiers::NONE, *key))
+            .map(|(_, panel_key)| *panel_key)
+    })
 }
 
 pub fn run(config: AppConfiguration, player: AudioPlayer) -> eframe::Result<()> {
@@ -405,8 +547,17 @@ fn run_native(
         Box::new(move |creation_context| {
             creation_context.egui_ctx.set_visuals(egui::Visuals::dark());
 
-            let hotkeys = crate::hotkeys::start(&hotkeys_config, creation_context.egui_ctx.clone());
-            let mut app = OverlayApp::new(hotkeys, corner, player, speech_speed);
+            // Both external-input pumps feed one channel: global hotkeys
+            // (where the OS supports them) and the CLI control socket (the
+            // only trigger path on GNOME Wayland).
+            let (event_sender, events) = std::sync::mpsc::channel::<UiEvent>();
+            crate::hotkeys::start(
+                &hotkeys_config,
+                creation_context.egui_ctx.clone(),
+                event_sender.clone(),
+            );
+            crate::ipc::start(creation_context.egui_ctx.clone(), event_sender);
+            let mut app = OverlayApp::new(events, corner, player, speech_speed);
             // The session's completion notifications must wake the event loop
             // even when the window is idle, so it needs the live egui context.
             app.try_start_session(&creation_context.egui_ctx);
@@ -470,6 +621,56 @@ fn should_force_x11(
                 Some(lazy_allrounder_platform::SessionKind::Wayland)
             ) && x11_display
         }
+    }
+}
+
+#[cfg(test)]
+mod keyboard_tests {
+    use super::{KeyIntent, PanelKey, keyboard_intent};
+    use crate::state::Mode;
+
+    #[test]
+    fn idle_letters_trigger_their_modes() {
+        assert_eq!(
+            keyboard_intent(PanelKey::Read, false),
+            KeyIntent::Trigger(Mode::Read)
+        );
+        assert_eq!(
+            keyboard_intent(PanelKey::Summarize, false),
+            KeyIntent::Trigger(Mode::Summarize)
+        );
+        assert_eq!(
+            keyboard_intent(PanelKey::Explain, false),
+            KeyIntent::Trigger(Mode::Explain)
+        );
+        assert_eq!(
+            keyboard_intent(PanelKey::Dictate, false),
+            KeyIntent::Trigger(Mode::Dictate)
+        );
+    }
+
+    #[test]
+    fn busy_blocks_every_trigger() {
+        for key in [
+            PanelKey::Read,
+            PanelKey::Summarize,
+            PanelKey::Explain,
+            PanelKey::Dictate,
+        ] {
+            assert_eq!(keyboard_intent(key, true), KeyIntent::Nothing);
+        }
+    }
+
+    #[test]
+    fn ask_focuses_the_question_field_even_while_busy() {
+        assert_eq!(
+            keyboard_intent(PanelKey::Ask, false),
+            KeyIntent::FocusQuestion
+        );
+        assert_eq!(
+            keyboard_intent(PanelKey::Ask, true),
+            KeyIntent::FocusQuestion
+        );
     }
 }
 

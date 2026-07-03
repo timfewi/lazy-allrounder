@@ -36,6 +36,17 @@ impl Mode {
     }
 }
 
+/// An input that arrived from outside the window: a registered global
+/// hotkey, or a CLI command over the control socket. Both pumps feed one
+/// channel so the overlay has a single point where external inputs meet
+/// its state machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiEvent {
+    Trigger(Mode),
+    TogglePanel,
+    Stop,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Activity {
     Idle,
@@ -65,10 +76,6 @@ impl OverlayState {
             panel_open: false,
             activity: Activity::Idle,
         }
-    }
-
-    pub fn toggle_panel(&mut self) {
-        self.panel_open = !self.panel_open;
     }
 
     pub fn close_panel(&mut self) {
@@ -194,13 +201,16 @@ mod tests {
     }
 
     #[test]
-    fn panel_toggles_independently_of_activity() {
+    fn panel_open_state_is_independent_of_activity() {
         let mut state = OverlayState::new();
         state.begin(Mode::Read);
-        state.toggle_panel();
-        assert!(state.panel_open);
+        state.panel_open = true;
         assert!(state.is_busy());
         state.close_panel();
         assert!(!state.panel_open);
+        assert!(
+            state.is_busy(),
+            "closing the panel does not stop the action"
+        );
     }
 }
