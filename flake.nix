@@ -24,10 +24,10 @@
           pkgs.libGL
           pkgs.libxkbcommon
           pkgs.wayland
-          pkgs.xorg.libX11
-          pkgs.xorg.libXcursor
-          pkgs.xorg.libXrandr
-          pkgs.xorg.libXi
+          pkgs.libx11
+          pkgs.libxcursor
+          pkgs.libxrandr
+          pkgs.libxi
           pkgs.fontconfig
           pkgs.alsa-lib
           pkgs.dbus
@@ -105,10 +105,10 @@
             pkgs.libGL
             pkgs.libxkbcommon
             pkgs.wayland
-            pkgs.xorg.libX11
-            pkgs.xorg.libXcursor
-            pkgs.xorg.libXrandr
-            pkgs.xorg.libXi
+            pkgs.libx11
+            pkgs.libxcursor
+            pkgs.libxrandr
+            pkgs.libxi
             pkgs.fontconfig
           ];
 
