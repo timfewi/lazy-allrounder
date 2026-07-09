@@ -614,11 +614,11 @@ mod tests {
         .expect("tts voice should parse");
         assert_eq!(config.tts.voice.as_deref(), Some("american_female"));
 
-        // Defaults stay paired: no [tts] section keeps kokoro + its voice.
+        // Defaults stay paired: no [tts] section keeps grok-voice + its voice.
         let defaults =
             parse_configuration("", Path::new("config.toml")).expect("empty config parses");
-        assert_eq!(defaults.tts.model, "hexgrad/kokoro-82m");
-        assert_eq!(defaults.tts.voice.as_deref(), Some("af_heart"));
+        assert_eq!(defaults.tts.model, "x-ai/grok-voice-tts-1.0");
+        assert_eq!(defaults.tts.voice.as_deref(), Some("eve"));
 
         // A custom model without a voice must NOT inherit the default voice.
         let custom = parse_configuration(

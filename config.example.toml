@@ -6,14 +6,16 @@ model = "qwen/qwen3.6-flash"
 provider = "openrouter"
 model = "openai/whisper-large-v3-turbo"
 
-# Known-good OpenRouter TTS combos:
+# Known-good OpenRouter TTS combos. grok-voice is the default because it reads
+# 20+ languages and detects the input language itself; the others are English-
+# or Kokoro-family only and cannot speak German.
+#   model = "x-ai/grok-voice-tts-1.0"           voice = "eve" | "ara" | "rex"
 #   model = "hexgrad/kokoro-82m"                voice = "af_heart" | "af_alloy"
 #   model = "zyphra/zonos-v0.1-transformer"     voice = "american_female"
-#   model = "x-ai/grok-voice-tts-1.0"           voice = "Eve"
 [tts]
 provider = "openrouter"
-model = "hexgrad/kokoro-82m"
-voice = "af_heart"
+model = "x-ai/grok-voice-tts-1.0"
+voice = "eve"
 # Speaking speed multiplier (0.25–4.0; 1.0 = the provider default). Also
 # adjustable live from the overlay panel's "Voice speed" slider.
 # speed = 1.3

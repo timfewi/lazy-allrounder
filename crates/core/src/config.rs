@@ -5,7 +5,7 @@ pub struct ProviderConfiguration {
     pub provider: String,
     pub model: String,
     /// Provider-specific voice name; only meaningful for the TTS pipeline
-    /// (e.g. kokoro's "af_heart"). None lets the provider client choose.
+    /// (e.g. grok-voice's "eve"). None lets the provider client choose.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voice: Option<String>,
     /// Speaking speed multiplier; only meaningful for the TTS pipeline.
@@ -34,8 +34,11 @@ impl ProviderConfiguration {
     }
 }
 
-/// The range of speaking speeds the OpenAI-compatible speech endpoint (and
-/// kokoro) accepts; config values are clamped into it before use.
+/// The widest range of speaking speeds the OpenAI-compatible speech endpoint
+/// accepts; config values are clamped into it before use. Individual models are
+/// stricter — the default x-ai/grok-voice-tts-1.0 rejects anything outside
+/// 0.7..=1.5 — so a speed valid here can still be a 400 at the provider. Kept
+/// wide because the clamp is shared by every TTS model.
 pub const TTS_SPEED_RANGE: std::ops::RangeInclusive<f32> = 0.25..=4.0;
 
 /// Clamps a configured speaking speed into [`TTS_SPEED_RANGE`], mapping
@@ -162,7 +165,8 @@ fn default_stt_configuration() -> ProviderConfiguration {
 }
 
 fn default_tts_configuration() -> ProviderConfiguration {
-    // google/gemini-3.1-flash-tts-preview was removed from OpenRouter and
-    // now returns 400; kokoro is the known-good hosted TTS default.
-    ProviderConfiguration::with_voice("openrouter", "hexgrad/kokoro-82m", "af_heart")
+    // grok-voice covers 20+ languages and detects the input language itself,
+    // so the same voice reads English and German. kokoro is cheaper but its
+    // eight languages exclude German, and it would phonemize it as English.
+    ProviderConfiguration::with_voice("openrouter", "x-ai/grok-voice-tts-1.0", "eve")
 }
