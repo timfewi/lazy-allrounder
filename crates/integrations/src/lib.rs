@@ -10,8 +10,8 @@ use lazy_allrounder_core::{
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 
-// Matches the default TTS model (x-ai/grok-voice-tts-1.0) in core's config.
-const DEFAULT_TTS_VOICE: &str = "eve";
+// Matches the default TTS model (hexgrad/kokoro-82m) in core's config.
+const DEFAULT_TTS_VOICE: &str = "af_heart";
 const DEFAULT_TTS_RESPONSE_FORMAT: &str = "mp3";
 // Sent when no speed is configured: pins the pace at 1.0x instead of
 // delegating to the provider's default, which could drift between releases.
@@ -155,7 +155,7 @@ impl OpenRouterTextToSpeechClient {
         }
     }
 
-    /// Voice is provider- and model-specific (grok-voice wants "eve",
+    /// Voice is provider- and model-specific (kokoro wants "af_heart",
     /// OpenAI-style models want "alloy"), and speed is a user preference, so
     /// both are set per client rather than threaded through the domain port.
     /// A `None` speed sends [`DEFAULT_TTS_SPEED`]; values are clamped to the
@@ -314,15 +314,14 @@ struct SpeechToTextResponse {
 fn system_prompt(operation: &TextOperation) -> String {
     match operation {
         TextOperation::Explain => {
-            "Explain the user text clearly and accurately. Keep it concise but useful. Respond in the same language as the user text, keeping code identifiers verbatim."
-                .to_owned()
+            "Explain the user text clearly and accurately. Keep it concise but useful.".to_owned()
         }
         TextOperation::Summarize => {
-            "Summarize the user text faithfully. Preserve the important points and remove repetition. Respond in the same language as the user text."
+            "Summarize the user text faithfully. Preserve the important points and remove repetition."
                 .to_owned()
         }
         TextOperation::Ask { .. } => {
-            "Answer the user's question using the provided source text. If the source text is insufficient, say so plainly. Respond in the same language as the question."
+            "Answer the user's question using the provided source text. If the source text is insufficient, say so plainly."
                 .to_owned()
         }
     }
@@ -419,28 +418,4 @@ struct OpenRouterErrorResponse {
 #[derive(Debug, Deserialize)]
 struct OpenRouterErrorDetail {
     message: String,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::system_prompt;
-    use lazy_allrounder_core::ports::TextOperation;
-
-    #[test]
-    fn every_system_prompt_mirrors_the_source_language() {
-        let operations = [
-            TextOperation::Explain,
-            TextOperation::Summarize,
-            TextOperation::Ask {
-                question: "Was steht hier?".to_owned(),
-            },
-        ];
-
-        for operation in operations {
-            assert!(
-                system_prompt(&operation).contains("same language"),
-                "{operation:?} does not instruct the model to mirror the source language"
-            );
-        }
-    }
 }
