@@ -70,6 +70,20 @@ impl RegisteredHotkeys {
     pub fn action_for(&self, hotkey_id: u32) -> Option<&str> {
         self.actions_by_id.get(&hotkey_id).map(String::as_str)
     }
+
+    /// Keeps the OS registration alive for the rest of the process and
+    /// returns just the id→action map. `GlobalHotKeyManager` is not `Send`
+    /// on Windows (and must stay on the thread that runs the win32 event
+    /// loop), so it cannot move into a pump thread; hotkeys live for the
+    /// app's whole lifetime anyway, so leaking it loses nothing.
+    pub fn leak(self) -> HashMap<u32, String> {
+        let RegisteredHotkeys {
+            _manager,
+            actions_by_id,
+        } = self;
+        std::mem::forget(_manager);
+        actions_by_id
+    }
 }
 
 /// Registers every (action, binding) pair. Fails as a whole if the platform

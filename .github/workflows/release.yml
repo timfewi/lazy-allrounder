@@ -43,7 +43,8 @@ jobs:
             libayatana-appindicator3-dev \
             libasound2-dev \
             libdbus-1-dev \
-            libxkbcommon-dev
+            libxkbcommon-dev \
+            libxdo-dev
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -109,6 +110,7 @@ jobs:
             libasound2-dev \
             libdbus-1-dev \
             libxkbcommon-dev \
+            libxdo-dev \
             libfuse2
 
       - uses: dtolnay/rust-toolchain@stable

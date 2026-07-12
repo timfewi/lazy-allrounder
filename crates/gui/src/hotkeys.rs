@@ -24,8 +24,11 @@ pub fn start(config: &HotkeysConfiguration, ctx: egui::Context, events: Sender<U
         return;
     }
 
-    let registered = match register_hotkeys(&bindings) {
-        Ok(registered) => registered,
+    // The manager stays registered on this thread for the app's lifetime
+    // (it is not `Send` on Windows); only the id→action map crosses into
+    // the pump thread.
+    let actions = match register_hotkeys(&bindings) {
+        Ok(registered) => registered.leak(),
         Err(error) => {
             tracing::warn!("global hotkeys are disabled: {error}");
             return;
@@ -35,10 +38,11 @@ pub fn start(config: &HotkeysConfiguration, ctx: egui::Context, events: Sender<U
     thread::Builder::new()
         .name("lazy-allrounder-hotkeys".to_owned())
         .spawn(move || {
-            // `registered` moves in so the OS registration lives exactly as
-            // long as the pump.
             while let Some(hotkey_id) = next_hotkey_press() {
-                let Some(mode) = registered.action_for(hotkey_id).and_then(mode_for_action) else {
+                let Some(mode) = actions
+                    .get(&hotkey_id)
+                    .and_then(|action| mode_for_action(action))
+                else {
                     continue;
                 };
                 if events.send(UiEvent::Trigger(mode)).is_err() {
