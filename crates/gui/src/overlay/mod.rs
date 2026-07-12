@@ -362,6 +362,9 @@ impl eframe::App for OverlayApp {
                 }
             }
         } else {
+            // Fade the panel (frame and contents) in with the expansion, so
+            // opening reads as one motion instead of a resize plus a pop.
+            ui.multiply_opacity(self.openness);
             theme::panel_frame().show(ui, |ui| {
                 ui.set_min_size(ui.available_size());
                 panel_response = panel::draw(
@@ -421,6 +424,9 @@ impl eframe::App for OverlayApp {
         }
         if let Some(enabled) = panel_response.set_autostart {
             self.set_autostart(enabled);
+        }
+        if panel_response.start_drag {
+            ctx.send_viewport_cmd(ViewportCommand::StartDrag);
         }
         if panel_response.stop {
             self.stop_playback();

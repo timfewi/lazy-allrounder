@@ -20,6 +20,9 @@ pub struct PanelResponse {
     pub stop: bool,
     pub close: bool,
     pub quit: bool,
+    /// A primary-button drag started on the header: the caller turns it into
+    /// an OS window move, mirroring how the collapsed badge is dragged.
+    pub start_drag: bool,
 }
 
 pub struct PanelInputs<'a> {
@@ -39,12 +42,20 @@ pub fn draw(ui: &mut Ui, inputs: PanelInputs<'_>) -> PanelResponse {
     let mut response = PanelResponse::default();
 
     ui.horizontal(|ui| {
-        ui.label(
-            RichText::new("Lazy Allrounder")
-                .color(theme::TEXT_PRIMARY)
-                .strong()
-                .size(16.0),
-        );
+        let title = ui
+            .add(
+                egui::Label::new(
+                    RichText::new("Lazy Allrounder")
+                        .color(theme::TEXT_PRIMARY)
+                        .strong()
+                        .size(16.0),
+                )
+                .sense(egui::Sense::drag()),
+            )
+            .on_hover_cursor(egui::CursorIcon::Grab);
+        if title.drag_started_by(egui::PointerButton::Primary) {
+            response.start_drag = true;
+        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui
                 .button(RichText::new("✕").color(theme::TEXT_MUTED))
@@ -179,7 +190,7 @@ fn draw_modes(
         (Mode::Summarize, "S"),
         (Mode::Explain, "E"),
     ] {
-        if mode_button(ui, mode.label(), hint, busy) {
+        if mode_button(ui, mode, hint, busy) {
             response.trigger = Some(mode);
         }
     }
@@ -203,12 +214,12 @@ fn draw_modes(
     let question_submitted = question_field.lost_focus()
         && ui.input(|input| input.key_pressed(egui::Key::Enter))
         && !question.trim().is_empty();
-    if mode_button(ui, Mode::Ask.label(), "A", busy) || (question_submitted && !busy) {
+    if mode_button(ui, Mode::Ask, "A", busy) || (question_submitted && !busy) {
         response.trigger = Some(Mode::Ask);
     }
 
     ui.add_space(6.0);
-    if mode_button(ui, Mode::Dictate.label(), "D", busy) {
+    if mode_button(ui, Mode::Dictate, "D", busy) {
         response.trigger = Some(Mode::Dictate);
     }
 
@@ -274,7 +285,21 @@ fn styled_button(ui: &Ui, label: &str) -> Button<'static> {
     .corner_radius(CornerRadius::same(10))
 }
 
-fn mode_button(ui: &mut Ui, label: &str, hint: &str, busy: bool) -> bool {
+/// The glyph shown before a mode's label. All of these live in egui's
+/// bundled monochrome emoji fonts, so they render everywhere without extra
+/// assets.
+fn mode_icon(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Read => "🔊",
+        Mode::Summarize => "📝",
+        Mode::Explain => "💡",
+        Mode::Ask => "💬",
+        Mode::Dictate => "🎤",
+    }
+}
+
+fn mode_button(ui: &mut Ui, mode: Mode, hint: &str, busy: bool) -> bool {
+    let label = format!("{}  {}", mode_icon(mode), mode.label());
     let button = Button::new(RichText::new(label).color(theme::TEXT_PRIMARY).size(14.0))
         .shortcut_text(shortcut_hint(hint))
         .fill(theme::SURFACE_RAISED)

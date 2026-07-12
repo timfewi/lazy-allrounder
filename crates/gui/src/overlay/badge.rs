@@ -20,7 +20,12 @@ pub fn draw(ui: &mut Ui, state: &OverlayState, time: f64) -> Response {
     let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
     let painter = ui.painter();
     let center = rect.center();
-    let base_radius = rect.width().min(rect.height()) * 0.5 - 4.0;
+    // Ease the disc slightly larger under the pointer so the badge answers
+    // hover with motion, not just a fill change.
+    let grow = ui
+        .ctx()
+        .animate_bool_with_time(response.id.with("hover-grow"), response.hovered(), 0.12);
+    let base_radius = (rect.width().min(rect.height()) * 0.5 - 4.0) * (0.95 + 0.05 * grow);
 
     let (ring_color, pulse, animated) = match &state.activity {
         Activity::Idle => (theme::ACCENT_SOFT, 0.0, false),

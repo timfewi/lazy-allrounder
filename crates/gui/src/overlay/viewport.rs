@@ -132,7 +132,11 @@ enum Plan {
     /// Collapsed and settled: send nothing (so OS drags stick), optionally
     /// adopting the current window position as the badge's resting spot.
     Idle { adopt: Option<Pos2> },
-    /// Animating or expanded: resize to `size`; reposition to `position` when
+    /// Fully open and settled: send nothing (so OS drags of the panel stick),
+    /// optionally adopting the badge position implied by the panel's current
+    /// rect, so collapsing folds back onto wherever the user dragged it.
+    Expanded { adopt: Option<Pos2> },
+    /// Animating: resize to `size`; reposition to `position` when
     /// a monitor is known (`None` on Wayland, where positioning is a no-op).
     Show { size: Vec2, position: Option<Pos2> },
 }
@@ -186,6 +190,14 @@ impl Geometry {
             return Plan::Idle { adopt };
         }
 
+        if openness >= 1.0 && self.prev_openness >= 1.0 {
+            let adopt = match (outer_rect.filter(is_plausible_window_rect), monitor) {
+                (Some(rect), Some(monitor)) => Some(badge_pos_for_panel(rect, monitor)),
+                _ => None,
+            };
+            return Plan::Expanded { adopt };
+        }
+
         let size = current_size(openness);
         let position = match (self.badge_pos, monitor) {
             (Some(badge_pos), Some(monitor)) => {
@@ -219,6 +231,13 @@ impl Geometry {
                     self.badge_pos = Some(position);
                 }
             }
+            Plan::Expanded { adopt } => {
+                // Open and quiescent: same hands-off treatment, tracking the
+                // panel instead of the badge.
+                if let Some(position) = adopt {
+                    self.badge_pos = Some(position);
+                }
+            }
             Plan::Show { size, position } => {
                 self.send_size(ctx, size);
                 if let Some(position) = position {
@@ -247,6 +266,26 @@ impl Geometry {
             self.last_position = Some(position);
         }
     }
+}
+
+/// The badge resting position implied by a (possibly user-dragged) expanded
+/// panel: the panel's corner in its monitor quadrant, so the collapse
+/// animation folds the panel down onto that corner instead of teleporting
+/// back to wherever the badge sat before the drag.
+fn badge_pos_for_panel(panel: Rect, monitor: Vec2) -> Pos2 {
+    let origin = monitor_origin(panel.min, monitor);
+    let center = panel.center() - origin;
+    let x = if center.x > monitor.x / 2.0 {
+        panel.max.x - BADGE_SIZE.x
+    } else {
+        panel.min.x
+    };
+    let y = if center.y > monitor.y / 2.0 {
+        panel.max.y - BADGE_SIZE.y
+    } else {
+        panel.min.y
+    };
+    pos2(x, y)
 }
 
 /// Some backends briefly report a zero-size rect during window creation;
@@ -428,6 +467,47 @@ mod tests {
         assert_eq!(
             geometry.plan(Some(MONITOR), Some(bogus), 0.0),
             Plan::Idle { adopt: None }
+        );
+    }
+
+    #[test]
+    fn badge_pos_for_panel_picks_the_quadrant_corner() {
+        // Panel in the bottom-right quadrant: badge folds onto its
+        // bottom-right corner.
+        let panel = Rect::from_min_size(pos2(1500.0, 600.0), PANEL_SIZE);
+        assert_eq!(
+            badge_pos_for_panel(panel, MONITOR),
+            pos2(
+                1500.0 + PANEL_SIZE.x - BADGE_SIZE.x,
+                600.0 + PANEL_SIZE.y - BADGE_SIZE.y
+            )
+        );
+
+        // Top-left quadrant: badge stays at the panel's top-left.
+        let panel = Rect::from_min_size(pos2(40.0, 40.0), PANEL_SIZE);
+        assert_eq!(badge_pos_for_panel(panel, MONITOR), pos2(40.0, 40.0));
+    }
+
+    #[test]
+    fn plan_stays_hands_off_while_fully_open_and_adopts_a_dragged_panel() {
+        let mut geometry = Geometry::new(OverlayCorner::TopLeft);
+        geometry.placed = true;
+        geometry.badge_pos = Some(pos2(20.0, 20.0));
+        geometry.prev_openness = 1.0;
+
+        let dragged = Rect::from_min_size(pos2(800.0, 500.0), PANEL_SIZE);
+        assert_eq!(
+            geometry.plan(Some(MONITOR), Some(dragged), 1.0),
+            Plan::Expanded {
+                adopt: Some(badge_pos_for_panel(dragged, MONITOR))
+            }
+        );
+
+        // Without a monitor (Wayland) there is nothing to adopt, but the
+        // window is still left alone.
+        assert_eq!(
+            geometry.plan(None, Some(dragged), 1.0),
+            Plan::Expanded { adopt: None }
         );
     }
 
