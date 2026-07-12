@@ -1,0 +1,14 @@
+# Default: maintainers
+* @timfewi
+
+# Rust workspace
+/crates/ @timfewi
+/xtask/ @timfewi
+
+# Packaging
+/flake.nix @timfewi
+/Cargo.toml @timfewi
+
+# Docs
+/docs/ @timfewi
+/README.md @timfewi
