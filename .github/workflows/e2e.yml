@@ -116,7 +116,7 @@ jobs:
       # The runner's virtual GPU only exposes OpenGL 1.1; Mesa's software
       # rasterizer gives eframe the modern context it needs.
       - name: Install Mesa (software OpenGL)
-        uses: ssciwr/setup-mesa-dist-win@v2
+        uses: ssciwr/setup-mesa-dist-win@v3
 
       - name: Build GUI
         run: cargo build -p lazy-allrounder-gui
