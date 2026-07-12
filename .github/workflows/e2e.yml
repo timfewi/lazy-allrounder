@@ -1,0 +1,135 @@
+name: E2E
+
+# Cross-platform smoke: launch the real overlay GUI in each OS runner VM,
+# prove it comes up, answers its control surface, and stays alive.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_LOG: info
+
+jobs:
+  linux:
+    name: Ubuntu VM
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            libasound2-dev \
+            libdbus-1-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-0 \
+            libxdo-dev \
+            xvfb \
+            dbus \
+            libgl1 \
+            libgl1-mesa-dri
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build GUI and CLI
+        run: cargo build -p lazy-allrounder-gui -p lazy-allrounder-cli
+
+      - name: Launch overlay, drive it over the control socket
+        run: |
+          export XDG_RUNTIME_DIR="$(mktemp -d)"
+          export LIBGL_ALWAYS_SOFTWARE=1
+          dbus-run-session -- xvfb-run -a bash -euxo pipefail -c '
+            target/debug/lazy-allrounder-gui &
+            GUI_PID=$!
+
+            # The control socket appearing means the event loop is up.
+            SOCK="$XDG_RUNTIME_DIR/lazy-allrounder-gui.sock"
+            for _ in $(seq 1 60); do
+              [ -S "$SOCK" ] && break
+              kill -0 "$GUI_PID"   # fail fast if the GUI already died
+              sleep 0.5
+            done
+            test -S "$SOCK"
+
+            # A real command over the socket must be accepted (exit 0).
+            target/debug/lazy-allrounder gui toggle
+            sleep 2
+
+            # Toggling the panel must not have crashed the overlay.
+            kill -0 "$GUI_PID"
+            kill "$GUI_PID"
+          '
+
+  macos:
+    name: macOS VM
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build GUI and CLI
+        run: cargo build -p lazy-allrounder-gui -p lazy-allrounder-cli
+
+      - name: Launch overlay, drive it over the control socket
+        run: |
+          export XDG_RUNTIME_DIR="$(mktemp -d)"
+          bash -euxo pipefail -c '
+            target/debug/lazy-allrounder-gui &
+            GUI_PID=$!
+
+            SOCK="$XDG_RUNTIME_DIR/lazy-allrounder-gui.sock"
+            for _ in $(seq 1 60); do
+              [ -S "$SOCK" ] && break
+              kill -0 "$GUI_PID"
+              sleep 0.5
+            done
+            test -S "$SOCK"
+
+            target/debug/lazy-allrounder gui toggle
+            sleep 2
+
+            kill -0 "$GUI_PID"
+            kill "$GUI_PID"
+          '
+
+  windows:
+    name: Windows VM
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # The runner's virtual GPU only exposes OpenGL 1.1; Mesa's software
+      # rasterizer gives eframe the modern context it needs.
+      - name: Install Mesa (software OpenGL)
+        uses: ssciwr/setup-mesa-dist-win@v2
+
+      - name: Build GUI
+        run: cargo build -p lazy-allrounder-gui
+
+      # No control socket on Windows — the smoke is: the overlay starts,
+      # creates its window, and is still running after a grace period.
+      - name: Launch overlay and verify it stays alive
+        shell: pwsh
+        run: |
+          $gui = Start-Process -FilePath "target/debug/lazy-allrounder-gui.exe" -PassThru
+          Start-Sleep -Seconds 15
+          if ($gui.HasExited) {
+            Write-Error "overlay exited early with code $($gui.ExitCode)"
+            exit 1
+          }
+          Stop-Process -Id $gui.Id
