@@ -14,7 +14,9 @@ First release.
 ### Added
 - **Overlay GUI** (`lazy-allrounder-gui`) — cross-platform always-on-top
   waveform badge + expandable panel with global hotkeys and playback
-  controls; draggable, hardened geometry, works on GNOME Wayland.
+  controls; hardened geometry, works on GNOME Wayland. Badge and panel are
+  both draggable, the panel fades in with its expand animation, the badge
+  answers hover with motion, and every mode button carries an icon.
 - **Voice actions** — read aloud, summarize, explain, and ask about the
   current selection or clipboard; selection-first reading.
 - **Dictation** — real microphone capture (PipeWire `pw-record` on Linux),
@@ -30,6 +32,9 @@ First release.
 - **Packaging** — Nix flake (`nix profile install github:timfewi/lazy-allrounder`),
   plus native installers (deb, AppImage, dmg, NSIS) and prebuilt archives for
   Linux, macOS (x86_64 + aarch64), and Windows via the release workflow.
+- **E2E smoke tests** — CI launches the real overlay in Ubuntu, macOS, and
+  Windows VMs and drives it over the control socket (Unix) or verifies it
+  stays alive (Windows).
 
 [Unreleased]: https://github.com/timfewi/lazy-allrounder/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/timfewi/lazy-allrounder/releases/tag/v0.1.0
