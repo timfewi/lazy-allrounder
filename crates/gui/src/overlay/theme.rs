@@ -18,7 +18,7 @@ pub fn panel_frame() -> egui::Frame {
         .fill(SURFACE)
         .corner_radius(CornerRadius::same(16))
         .stroke(Stroke::new(
-            1.0,
+            1.0_f32,
             Color32::from_rgba_premultiplied(255, 255, 255, 18),
         ))
         .shadow(Shadow {

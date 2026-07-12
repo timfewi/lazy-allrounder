@@ -45,7 +45,7 @@ pub fn draw(ui: &mut Ui, state: &OverlayState, time: f64) -> Response {
             center,
             ring_radius,
             Stroke::new(
-                2.0,
+                2.0_f32,
                 Color32::from_rgba_unmultiplied(
                     ring_color.r(),
                     ring_color.g(),
@@ -62,7 +62,7 @@ pub fn draw(ui: &mut Ui, state: &OverlayState, time: f64) -> Response {
         theme::SURFACE
     };
     painter.circle_filled(center, base_radius, fill);
-    painter.circle_stroke(center, base_radius, Stroke::new(2.0, ring_color));
+    painter.circle_stroke(center, base_radius, Stroke::new(2.0_f32, ring_color));
 
     // The mark itself picks up the accent while idle, and the activity color
     // otherwise, so the whole badge reads as one status light.
