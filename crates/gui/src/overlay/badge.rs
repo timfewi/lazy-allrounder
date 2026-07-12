@@ -22,9 +22,9 @@ pub fn draw(ui: &mut Ui, state: &OverlayState, time: f64) -> Response {
     let center = rect.center();
     // Ease the disc slightly larger under the pointer so the badge answers
     // hover with motion, not just a fill change.
-    let grow = ui
-        .ctx()
-        .animate_bool_with_time(response.id.with("hover-grow"), response.hovered(), 0.12);
+    let grow =
+        ui.ctx()
+            .animate_bool_with_time(response.id.with("hover-grow"), response.hovered(), 0.12);
     let base_radius = (rect.width().min(rect.height()) * 0.5 - 4.0) * (0.95 + 0.05 * grow);
 
     let (ring_color, pulse, animated) = match &state.activity {
