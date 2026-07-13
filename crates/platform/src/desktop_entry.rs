@@ -1,5 +1,5 @@
 //! Linux desktop integration: a per-user `.desktop` entry plus a hicolor
-//! icon, so the desktop shows the app's real name and waveform icon instead
+//! icon, so the desktop shows the app's real name and logo icon instead
 //! of a letter fallback.
 //!
 //! GNOME (and most desktops) identify a window by matching its Wayland

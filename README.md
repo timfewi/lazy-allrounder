@@ -1,5 +1,9 @@
 # lazy-allrounder
 
+<p align="center">
+  <img src="assets/lazy-allrounder-logo.png" alt="lazy-allrounder logo" width="160">
+</p>
+
 Cross-platform voice AI in Rust for dictation, speech-to-text, text-to-speech, and reading workflows on Windows, macOS, and Linux — with a floating overlay GUI.
 
 ## Description
@@ -52,7 +56,7 @@ After installing, follow **Configuration** below (an OpenRouter API key + one co
 - The panel's **Voice speed** slider controls the speaking pace (also persisted as `speed` under `[tts]` in the config).
 - Global hotkeys (X11/macOS/Windows; defaults under `[hotkeys]`): `Super+S` read aloud, `Super+W` summarize, `Super+A` explain, `Super+Shift+A` ask, `Super+D` toggle dictation. Pressing a hotkey while audio plays stops it.
 - Clicking the badge opens the panel: mode buttons, a question box for ask mode, a stop button while busy, and quit.
-- On first start the GUI installs a per-user `.desktop` entry and icon (`~/.local/share/applications/lazy-allrounder.desktop`), so the window shows the waveform icon instead of a letter fallback.
+- On first start the GUI installs a per-user `.desktop` entry and icon (`~/.local/share/applications/lazy-allrounder.desktop`), so the window shows the logo icon instead of a letter fallback.
 
 ### Wayland notes (GNOME etc.)
 

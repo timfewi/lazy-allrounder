@@ -1,17 +1,12 @@
-//! The collapsed floating badge: a circular button carrying the app's
-//! waveform mark, whose ring color and pulse reflect the current activity.
-//! The badge senses drags so the window can be moved (the caller turns a
-//! drag into an OS window move).
+//! The collapsed floating badge: a circular button carrying the app's logo
+//! mark, ringed by a status color that pulses while working. The badge senses
+//! drags so the window can be moved (the caller turns a drag into an OS window
+//! move).
 
-use egui::{Color32, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2, pos2, vec2};
+use egui::{Color32, Rect, Response, Sense, Stroke, TextureHandle, Ui, Vec2, pos2};
 
 use crate::overlay::theme;
 use crate::state::{Activity, OverlayState};
-
-/// Relative bar heights of the waveform mark, center bar tallest. Keep in
-/// sync with `heights` in the icon generator (`tools/gen_icon.py`) so the
-/// badge and the window/tray icon read as the same logo.
-const BAR_HEIGHTS: [f32; 5] = [0.42, 0.72, 1.0, 0.72, 0.42];
 
 pub fn draw(ui: &mut Ui, state: &OverlayState, time: f64) -> Response {
     let size = ui.available_size().min(Vec2::splat(56.0));
@@ -20,21 +15,21 @@ pub fn draw(ui: &mut Ui, state: &OverlayState, time: f64) -> Response {
     let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
     let painter = ui.painter();
     let center = rect.center();
-    // Ease the disc slightly larger under the pointer so the badge answers
-    // hover with motion, not just a fill change.
+    // Ease the badge slightly larger under the pointer so it answers hover with
+    // motion, not just a color change.
     let grow =
         ui.ctx()
             .animate_bool_with_time(response.id.with("hover-grow"), response.hovered(), 0.12);
     let base_radius = (rect.width().min(rect.height()) * 0.5 - 4.0) * (0.95 + 0.05 * grow);
 
-    let (ring_color, pulse, animated) = match &state.activity {
-        Activity::Idle => (theme::ACCENT_SOFT, 0.0, false),
+    let (ring_color, pulse) = match &state.activity {
+        Activity::Idle => (theme::ACCENT_SOFT, 0.0),
         Activity::Processing { .. } => {
             let pulse = ((time * 4.0).sin() * 0.5 + 0.5) as f32;
-            (theme::ACCENT, pulse, true)
+            (theme::ACCENT, pulse)
         }
-        Activity::Done { .. } => (theme::SUCCESS, 0.0, false),
-        Activity::Error { .. } => (theme::FAILURE, 0.0, false),
+        Activity::Done { .. } => (theme::SUCCESS, 0.0),
+        Activity::Error { .. } => (theme::FAILURE, 0.0),
     };
 
     // Soft outer pulse ring while processing.
@@ -56,22 +51,21 @@ pub fn draw(ui: &mut Ui, state: &OverlayState, time: f64) -> Response {
         );
     }
 
-    let fill = if response.hovered() {
-        theme::SURFACE_RAISED
-    } else {
-        theme::SURFACE
-    };
-    painter.circle_filled(center, base_radius, fill);
-    painter.circle_stroke(center, base_radius, Stroke::new(2.0_f32, ring_color));
+    // The logo mark itself, in true color; a corrupt embedded asset degrades to
+    // a filled accent disc so the badge stays visible.
+    match logo_texture(ui.ctx()) {
+        Some(texture) => {
+            let mark = Rect::from_center_size(center, Vec2::splat(base_radius * 2.0));
+            let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+            painter.image(texture.id(), mark, uv, Color32::WHITE);
+        }
+        None => {
+            painter.circle_filled(center, base_radius * 0.8, theme::ACCENT);
+        }
+    }
 
-    // The mark itself picks up the accent while idle, and the activity color
-    // otherwise, so the whole badge reads as one status light.
-    let mark_color = if matches!(state.activity, Activity::Idle) {
-        theme::ACCENT
-    } else {
-        ring_color
-    };
-    draw_waveform(painter, center, base_radius, mark_color, animated, time);
+    // Status ring hugging the mark: accent while idle, activity color otherwise.
+    painter.circle_stroke(center, base_radius, Stroke::new(2.0_f32, ring_color));
 
     if let Some(status) = state.status_line() {
         response.clone().on_hover_text(status);
@@ -80,38 +74,19 @@ pub fn draw(ui: &mut Ui, state: &OverlayState, time: f64) -> Response {
     response
 }
 
-/// Paints the five-bar waveform mark centered in the badge. While `animated`,
-/// each bar bounces on its own phase so the mark visibly "speaks" during
-/// processing; otherwise the bars hold their resting heights.
-fn draw_waveform(
-    painter: &egui::Painter,
-    center: Pos2,
-    base_radius: f32,
-    color: Color32,
-    animated: bool,
-    time: f64,
-) {
-    let count = BAR_HEIGHTS.len();
-    let bar_width = base_radius * 0.22;
-    let gap = base_radius * 0.16;
-    let span = count as f32 * bar_width + (count as f32 - 1.0) * gap;
-    let left = center.x - span / 2.0 + bar_width / 2.0;
-    // Tallest bar spans most of the disc's diameter.
-    let max_height = base_radius * 1.15;
-    let rounding = bar_width / 2.0;
-
-    for (index, &rest) in BAR_HEIGHTS.iter().enumerate() {
-        let factor = if animated {
-            // Bounce around the resting height on a per-bar phase offset.
-            let wave = (time * 7.0 + index as f64 * 1.3).sin() as f32;
-            (rest + wave * 0.28).clamp(0.16, 1.0)
-        } else {
-            rest
-        };
-
-        let half = (factor * max_height / 2.0).max(rounding);
-        let x = left + index as f32 * (bar_width + gap);
-        let bar = Rect::from_center_size(pos2(x, center.y), vec2(bar_width, half * 2.0));
-        painter.rect_filled(bar, rounding, color);
+/// Uploads the embedded logo to a GPU texture once and caches the handle in
+/// egui memory, so the badge does not re-upload the image every frame.
+fn logo_texture(ctx: &egui::Context) -> Option<TextureHandle> {
+    let id = egui::Id::new("lazy-allrounder-badge-logo");
+    if let Some(handle) = ctx.data(|d| d.get_temp::<TextureHandle>(id)) {
+        return Some(handle);
     }
+    let icon = crate::icon::decode()?;
+    let image = egui::ColorImage::from_rgba_unmultiplied(
+        [icon.width as usize, icon.height as usize],
+        &icon.rgba,
+    );
+    let handle = ctx.load_texture("badge-logo", image, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|d| d.insert_temp(id, handle.clone()));
+    Some(handle)
 }
