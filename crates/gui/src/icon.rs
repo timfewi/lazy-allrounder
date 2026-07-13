@@ -1,4 +1,4 @@
-//! The embedded app icon (the waveform mark from `assets/icon.png`), decoded
+//! The embedded app icon (the logo mark from `assets/icon.png`), decoded
 //! on demand into whichever icon a run needs — the eframe window icon in
 //! overlay mode, or the tray icon in tray mode (the two are mutually
 //! exclusive, so a launch decodes it once).

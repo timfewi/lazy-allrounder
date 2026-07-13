@@ -117,7 +117,7 @@ mod linux {
         gtk::main();
     }
 
-    // The waveform logo, shared with the overlay window icon. If the embedded
+    // The app logo, shared with the overlay window icon. If the embedded
     // asset ever fails to decode we fall back to a solid accent-blue square so
     // the tray still has a visible icon.
     fn tray_icon() -> Icon {
